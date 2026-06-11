@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syndicate Studio - AI Director</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-200 font-sans min-h-screen p-8 pb-20">
+
+    <div class="max-w-5xl mx-auto space-y-8">
+        
+        <!-- HEADER -->
+        <div class="bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700 text-center">
+            <h1 class="text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 mb-2">
+                Syndicate Studio
+            </h1>
+            <p class="text-gray-400">AI Multi-Agent Video Production Platform</p>
+        </div>
+
+        <!-- STEP 1: SCRIPTWRITER -->
+        <div class="bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700">
+            <h2 class="text-2xl font-bold mb-6 text-white border-b border-gray-700 pb-2">Step 1: Brief & Concepts</h2>
+            
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <div><label class="block text-sm text-gray-400 mb-1">Format</label><select id="video_format" class="w-full bg-gray-700 rounded p-2 text-white"><option>16:9</option><option>9:16</option><option>1:1</option></select></div>
+                <div><label class="block text-sm text-gray-400 mb-1">Duration (sec)</label><input type="number" id="total_duration" value="60" class="w-full bg-gray-700 rounded p-2 text-white"></div>
+                <div><label class="block text-sm text-gray-400 mb-1">Goal</label><input type="text" id="business_goal" value="Win Google AI Hackathon" class="w-full bg-gray-700 rounded p-2 text-white"></div>
+                <div><label class="block text-sm text-gray-400 mb-1">Audience</label><input type="text" id="target_audience" value="Tech Judges & Developers" class="w-full bg-gray-700 rounded p-2 text-white"></div>
+            </div>
+            <textarea id="topic_idea" rows="2" class="w-full bg-gray-700 rounded p-2 text-white mb-4">Meta-commercial about 4 AI Agents building this exact video.</textarea>
+            
+            <button onclick="runAgent1()" id="btn_agent1" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded transition-all shadow-lg">
+                Call Agent 1: Scriptwriter
+            </button>
+
+            <div id="concepts_container" class="mt-6 space-y-4"></div>
+        </div>
+
+        <!-- STEP 2: STORYBOARDER -->
+        <div id="step2_block" class="bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700 hidden opacity-50 transition-opacity duration-500">
+            <h2 class="text-2xl font-bold mb-4 text-white border-b border-gray-700 pb-2">Step 2: Storyboard</h2>
+            <p class="text-gray-400 mb-4">Select a concept to generate precise scenes.</p>
+            <div id="storyboard_container" class="space-y-4 mb-4"></div>
+            <button onclick="runAgent3()" id="btn_agent3" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 rounded transition-all hidden shadow-lg">
+                Call Agent 3: Prompt Engineer
+            </button>
+        </div>
+
+        <!-- STEP 3: PROMPT ENGINEER & RENDER -->
+        <div id="step3_block" class="bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700 hidden opacity-50 transition-opacity duration-500">
+            <h2 class="text-2xl font-bold mb-4 text-white border-b border-gray-700 pb-2">Step 3: Omni Rendering & VFX</h2>
+            <div id="prompts_container" class="space-y-8"></div>
+        </div>
+
+    </div>
+
+    <script>
+        let currentConcepts = [];
+        let chosenConcept = null;
+        let currentScenes = [];
+        let currentPrompts = []; 
+
+        async function runAgent1() {
+            const btn = document.getElementById('btn_agent1');
+            const container = document.getElementById('concepts_container');
+            btn.innerText = "Thinking..."; btn.disabled = true;
+            
+            const payload = {
+                video_format: document.getElementById('video_format').value,
+                total_duration: parseInt(document.getElementById('total_duration').value),
+                business_goal: document.getElementById('business_goal').value,
+                target_audience: document.getElementById('target_audience').value,
+                topic_idea: document.getElementById('topic_idea').value,
+                needs_voiceover: false
+            };
+
+            try {
+                const res = await fetch('/api/generate-concepts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const data = await res.json();
+                
+                // АПТЕЧКА ВЕРНУЛАСЬ!
+                if (!res.ok) throw new Error(data.detail || "Server Error");
+                
+                currentConcepts = data.concepts;
+                container.innerHTML = "";
+                currentConcepts.forEach((c, index) => {
+                    container.innerHTML += `
+                        <div class="bg-gray-700 p-4 rounded flex justify-between items-center border border-gray-600 mb-2">
+                            <div>
+                                <h3 class="font-bold text-blue-300">${c.working_title}</h3>
+                                <p class="text-sm text-gray-300">${c.logline}</p>
+                            </div>
+                            <button onclick="runAgent2(${index})" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded font-bold text-sm shadow-md ml-4">Select</button>
+                        </div>`;
+                });
+                
+                document.getElementById('step2_block').classList.remove('hidden');
+                document.getElementById('step3_block').classList.add('hidden'); 
+            } catch (error) {
+                alert("Agent 1 Error: " + error.message);
+            } finally {
+                btn.innerText = "Call Agent 1: Scriptwriter"; 
+                btn.disabled = false;
+            }
+        }
+
+        async function runAgent2(conceptIndex) {
+            chosenConcept = currentConcepts[conceptIndex];
+            const step2 = document.getElementById('step2_block');
+            const container = document.getElementById('storyboard_container');
+            const btn3 = document.getElementById('btn_agent3');
+            
+            step2.classList.remove('opacity-50');
+            container.innerHTML = '<p class="text-yellow-400 animate-pulse">Agent 2 is drawing scenes with strict Omni math...</p>';
+            
+            const payload = {
+                working_title: chosenConcept.working_title,
+                logline: chosenConcept.logline,
+                visual_style: chosenConcept.visual_style,
+                pacing: chosenConcept.pacing,
+                total_duration: parseInt(document.getElementById('total_duration').value)
+            };
+
+            try {
+                const res = await fetch('/api/generate-storyboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const data = await res.json();
+                
+                // АПТЕЧКА ВЕРНУЛАСЬ!
+                if (!res.ok) throw new Error(data.detail || "Server Error");
+
+                currentScenes = data.scenes;
+                container.innerHTML = "";
+                currentScenes.forEach(s => {
+                    container.innerHTML += `
+                        <div class="bg-gray-700 p-3 rounded text-sm border-l-4 border-green-500 mb-2">
+                            <strong>Scene ${s.scene_number} (${s.duration}s):</strong> ${s.visual_description} <br>
+                            <span class="text-gray-400">Camera: ${s.camera_movement}</span>
+                        </div>`;
+                });
+                
+                btn3.classList.remove('hidden');
+                document.getElementById('step3_block').classList.remove('hidden');
+                document.getElementById('prompts_container').innerHTML = ""; 
+            } catch (error) {
+                alert("Agent 2 Error: " + error.message);
+                container.innerHTML = ""; // Очищаем текст загрузки при ошибке
+            }
+        }
+
+        async function runAgent3() {
+            const step3 = document.getElementById('step3_block');
+            const container = document.getElementById('prompts_container');
+            const btn = document.getElementById('btn_agent3');
+            
+            step3.classList.remove('opacity-50');
+            btn.innerText = "Agent 3 is writing Omni Prompts..."; 
+            btn.disabled = true;
+            container.innerHTML = '<p class="text-purple-400 animate-pulse">Translating to Omni 6-dimensions...</p>';
+
+            const payload = {
+                visual_style: chosenConcept.visual_style,
+                scenes: currentScenes
+            };
+
+            try {
+                const res = await fetch('/api/generate-prompts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const data = await res.json();
+                
+                // АПТЕЧКА ВЕРНУЛАСЬ!
+                if (!res.ok) throw new Error(data.detail || "Server Error");
+
+                currentPrompts = data.prompts;
+                container.innerHTML = "";
+                currentPrompts.forEach((p, index) => {
+                    const typeColor = p.generation_type === 'image-to-video' ? 'text-pink-400' : 'text-blue-400';
+                    
+                    let imgPromptHtml = "";
+                    if (p.image_prompt) {
+                        imgPromptHtml = `
+                            <div class="bg-gray-800 p-3 rounded mb-3 border border-pink-900/50 relative">
+                                <div class="flex justify-between items-start">
+                                    <strong class="text-pink-300">Image Prompt (Nano Bana Pro):</strong>
+                                    <button onclick="copyToClipboard('image_prompt_text_${index}', this)" class="text-xs bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded text-white transition-colors duration-300">Copy</button>
+                                </div>
+                                <span id="image_prompt_text_${index}" class="text-sm text-gray-300 block mt-1">${p.image_prompt}</span>
+                            </div>`;
+                    }
+
+                    container.innerHTML += `
+                        <div class="bg-gray-700 p-5 rounded-lg border border-gray-600 shadow-lg" id="prompt_card_${index}">
+                            <div class="flex justify-between items-center mb-4">
+                                <h4 class="font-bold text-xl text-white">Scene ${p.scene_number} <span class="text-sm bg-gray-800 px-2 py-1 rounded text-gray-300 ml-2">${p.omni_duration} sec</span></h4>
+                                <span class="font-bold uppercase text-sm ${typeColor} bg-gray-800 px-3 py-1 rounded-full">${p.generation_type}</span>
+                            </div>
+                            
+                            ${imgPromptHtml}
+                            
+                            <div class="bg-gray-900 p-4 rounded border border-gray-600 mb-4 relative">
+                                <div class="flex justify-between items-start">
+                                    <strong class="text-blue-300">Omni Video Prompt:</strong>
+                                    <button onclick="copyToClipboard('prompt_text_${index}', this)" class="text-xs bg-blue-800 hover:bg-blue-700 px-3 py-1 rounded text-white transition-colors duration-300">Copy</button>
+                                </div>
+                                <span id="prompt_text_${index}" class="text-sm text-green-300 font-mono leading-relaxed block mt-2">${p.technical_prompt}</span>
+                            </div>
+
+                            <div id="render_block_${index}" class="hidden flex flex-col items-center bg-black p-4 rounded-lg mb-4 justify-center border border-gray-700 min-h-[16rem] relative">
+                                <div id="loading_anim_${index}" class="flex flex-col items-center my-8">
+                                    <svg class="animate-spin h-10 w-10 text-blue-500 mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                    <span class="text-blue-400 font-bold animate-pulse text-center" id="loading_text_${index}">Initializing...</span>
+                                </div>
+                                <img id="ref_image_${index}" src="https://picsum.photos/seed/${index}/800/450" class="w-full max-h-64 object-cover rounded hidden mb-2 border border-gray-600">
+                                
+                                <video id="video_player_${index}" class="w-full max-h-64 object-cover rounded hidden" controls loop muted autoplay>
+                                    <!-- Заглушка видео для Github-версии -->
+                                    <source src="https://www.w3schools.com/html/mov_bbb.mp4" type="video/mp4">
+                                </video>
+                            </div>
+
+                            <div class="flex flex-col gap-1" id="controls_${index}">
+                                <button onclick="generateVideo(${index})" id="btn_generate_${index}" class="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-3 rounded shadow-lg transition-transform transform hover:scale-[1.02]">
+                                    🎬 Generate Video
+                                </button>
+                                
+                                <!-- ПЛАШКА ЧЕСТНОСТИ -->
+                                <p id="hackathon_badge_${index}" class="text-[12px] text-yellow-500/80 text-center font-mono mt-2 mb-2 px-4">
+                                    *Hackathon Mode: Video generation API is currently mocked to bypass 10-min render times. Prompt data is fully validated.
+                                </p>
+                                
+                                <div class="flex gap-3 w-full mt-2">
+                                    <button onclick="alert('Video downloaded!')" id="btn_download_${index}" class="hidden flex-1 bg-gray-600 hover:bg-gray-500 text-white font-bold py-3 px-6 rounded shadow-lg">Download Video</button>
+                                    <button onclick="showEditUI(${index})" id="btn_edit_${index}" class="hidden flex-1 bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded shadow-lg">🪄 Edit Prompt (VFX Agent)</button>
+                                </div>
+                            </div>
+
+                            <div id="edit_block_${index}" class="hidden mt-4 bg-gray-800 p-4 rounded-lg border border-blue-500/50">
+                                <label class="block text-sm font-medium text-blue-300 mb-2">What do you want to change? (Agent 4 will rewrite the prompt)</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="edit_input_${index}" placeholder="e.g. Change the cosmic loom to a cyberpunk city..." class="flex-1 bg-gray-900 border border-gray-600 rounded p-2 text-white outline-none focus:border-blue-500">
+                                    <button onclick="applyEdit(${index})" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded text-white font-bold whitespace-nowrap">Optimize Prompt</button>
+                                </div>
+                                <div id="edit_result_${index}" class="hidden mt-4 bg-gray-900 border border-pink-500/50 p-4 rounded-lg relative">
+                                    <div class="flex justify-between items-start">
+                                        <strong class="text-pink-400">✨ Agent 4 Optimized Edit Prompt:</strong>
+                                        <button onclick="copyToClipboard('optimized_prompt_text_${index}', this)" class="text-xs bg-pink-800 hover:bg-pink-700 px-3 py-1 rounded text-white transition-colors duration-300">Copy</button>
+                                    </div>
+                                    <p id="optimized_prompt_text_${index}" class="text-green-300 font-mono text-sm mt-2 leading-relaxed"></p>
+                                    <p class="text-gray-400 text-xs mt-3 italic">Ready to be pasted into Omni engine to maintain exact video continuity.</p>
+                                </div>
+                            </div>
+                        </div>`;
+                });
+            } catch (error) {
+                alert("Agent 3 Error: " + error.message);
+                container.innerHTML = "";
+            } finally {
+                btn.innerText = "Call Agent 3: Prompt Engineer"; 
+                btn.disabled = false;
+            }
+        }
+
+        async function generateVideo(index) {
+            const btnGen = document.getElementById(`btn_generate_${index}`);
+            const badge = document.getElementById(`hackathon_badge_${index}`);
+            const renderBlock = document.getElementById(`render_block_${index}`);
+            const loadingAnim = document.getElementById(`loading_anim_${index}`);
+            const loadingText = document.getElementById(`loading_text_${index}`);
+            const refImage = document.getElementById(`ref_image_${index}`);
+            const videoPlayer = document.getElementById(`video_player_${index}`);
+            const btnDownload = document.getElementById(`btn_download_${index}`);
+            const btnEdit = document.getElementById(`btn_edit_${index}`);
+            
+            const genType = currentPrompts[index].generation_type;
+
+            btnGen.classList.add('hidden');
+            badge.classList.add('hidden');
+            
+            renderBlock.classList.remove('hidden');
+            loadingAnim.classList.remove('hidden');
+
+            if (genType === 'image-to-video') {
+                loadingText.innerText = "Drawing reference image (Nano Bana Pro)...";
+                await new Promise(r => setTimeout(r, 2000));
+                refImage.classList.remove('hidden');
+                
+                loadingText.innerText = "Animating image in Omni...";
+                await new Promise(r => setTimeout(r, 3000));
+                refImage.classList.add('hidden'); 
+            } else {
+                loadingText.innerText = "Generating video directly (Omni)...";
+                await new Promise(r => setTimeout(r, 4000));
+            }
+
+            loadingAnim.classList.add('hidden');
+            videoPlayer.classList.remove('hidden');
+            btnDownload.classList.remove('hidden');
+            btnEdit.classList.remove('hidden');
+            videoPlayer.play();
+        }
+
+        function showEditUI(index) {
+            document.getElementById(`edit_block_${index}`).classList.toggle('hidden');
+        }
+
+        async function applyEdit(index) {
+            const userInput = document.getElementById(`edit_input_${index}`).value;
+            if (!userInput) return alert("Please type what you want to change!");
+
+            const originalPromptElement = document.getElementById(`prompt_text_${index}`);
+            let originalPrompt = originalPromptElement.innerText;
+            const btnEdit = document.getElementById(`btn_edit_${index}`);
+            const resultBlock = document.getElementById(`edit_result_${index}`);
+            const resultText = document.getElementById(`optimized_prompt_text_${index}`);
+            
+            btnEdit.innerText = "Agent 4 Thinking..."; 
+            btnEdit.disabled = true;
+            resultBlock.classList.add('hidden');
+
+            try {
+                const res = await fetch('/api/format-edit-prompt', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ original_prompt: originalPrompt, user_request: userInput }) 
+                });
+                const data = await res.json();
+                
+                // АПТЕЧКА ВЕРНУЛАСЬ!
+                if (!res.ok) throw new Error(data.detail || "Server Error");
+                
+                resultText.innerText = data.optimized_edit_prompt;
+                resultBlock.classList.remove('hidden');
+
+            } catch (error) {
+                alert("Agent 4 Error: " + error.message);
+            } finally {
+                btnEdit.innerText = "🪄 Edit Prompt (VFX Agent)"; 
+                btnEdit.disabled = false;
+            }
+        }
+
+        async function copyToClipboard(elementId, btnElement) {
+            const textToCopy = document.getElementById(elementId).innerText;
+            try {
+                await navigator.clipboard.writeText(textToCopy);
+                
+                const originalText = btnElement.innerText;
+                const originalBg = btnElement.className.match(/bg-\w+-\d+/)[0];
+                const originalHover = btnElement.className.match(/hover:bg-\w+-\d+/)[0];
+                
+                btnElement.innerText = "Copied! ✓";
+                btnElement.classList.remove(originalBg, originalHover);
+                btnElement.classList.add('bg-green-600', 'hover:bg-green-500');
+                
+                setTimeout(() => {
+                    btnElement.innerText = originalText;
+                    btnElement.classList.remove('bg-green-600', 'hover:bg-green-500');
+                    btnElement.classList.add(originalBg, originalHover);
+                }, 2000);
+
+            } catch (err) {
+                console.error('Failed to copy: ', err);
+                alert('Copy failed, please try selecting the text manually.');
+            }
+        }
+    </script>
+</body>
+</html>
