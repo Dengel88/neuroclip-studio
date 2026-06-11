@@ -11,30 +11,27 @@ To prevent API abuse, the live demo is protected by Basic Auth.
 
 Developed for the **Google AI Agent Hackathon**, Neuroclip Studio is an enterprise-grade agentic pipeline that transforms a simple text brief into a production-ready, highly technical cinematic storyboard using an orchestrated team of 4 specialized AI Agents.
 
-<pre>
 ## 🏗️ Architecture Diagram
 
 ```mermaid
 graph TD
-User([User Brief]) --> UI[Neuroclip Studio UI]
-
-UI -->|Step 1| A1[Agent 1: Scriptwriter<br>Gemini 1.5 Pro]
-A1 -->|Strict JSON Concepts| UI
-
-UI -->|Step 2| A2[Agent 2: Storyboarder<br>Gemini 1.5 Flash]
-A2 -->|Math Constraints & Hard Cuts| UI
-
-UI -->|Step 3| A3[Agent 3: Prompt Engineer<br>Gemini 1.5 Flash]
-A3 --> Router{Router Logic}
-Router -->|Text-to-Video| T2V[6-Dimension Omni Prompt]
-Router -->|Image-to-Video| I2V[Nano Bana Pro Image Prompt <br>+ Omni Video Prompt]
-T2V --> UI
-I2V --> UI
-
-UI -->|Step 4: User Edits| A4[Agent 4: VFX Supervisor<br>Gemini 1.5 Flash]
-A4 -->|5-Rule Optimized Edit Prompt| UI
-```
-</pre>
+    User([User Brief]) --> UI[Neuroclip Studio UI]
+    
+    UI -->|Step 1| A1[Agent 1: Scriptwriter<br>Gemini 1.5 Pro]
+    A1 -->|Strict JSON Concepts| UI
+    
+    UI -->|Step 2| A2[Agent 2: Storyboarder<br>Gemini 1.5 Flash]
+    A2 -->|Math Constraints & Hard Cuts| UI
+    
+    UI -->|Step 3| A3[Agent 3: Prompt Engineer<br>Gemini 1.5 Flash]
+    A3 --> Router{Router Logic}
+    Router -->|Text-to-Video| T2V[6-Dimension Omni Prompt]
+    Router -->|Image-to-Video| I2V[Nano Bana Pro Image Prompt <br>+ Omni Video Prompt]
+    T2V --> UI
+    I2V --> UI
+    
+    UI -->|Step 4: User Edits| A4[Agent 4: VFX Supervisor<br>Gemini 1.5 Flash]
+    A4 -->|5-Rule Optimized Edit Prompt| UI
 
 ---
 
