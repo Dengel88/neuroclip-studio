@@ -2,7 +2,7 @@
 **An Autonomous AI Multi-Agent Video Production Platform powered by Google Gemini.**
 
 🚀 **Live Demo:** [neuroclipstudio.com](https://neuroclipstudio.com)  
-🎥 **Demo Video:** [Presentetion](https://drive.google.com/file/d/1mUTNLedQR70cvlbA1jGIv-Qr3KV72h7U/view?usp=sharing)
+🎥 **Demo Video:** [Presentetion](https://youtu.be/HyqbQnbJVOI)
 
 🔒 **Testing Access Credentials:**
 To prevent API abuse, the live demo is protected by Basic Auth.
