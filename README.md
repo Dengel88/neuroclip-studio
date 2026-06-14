@@ -1,7 +1,7 @@
 # 🎬 Neuroclip Studio
 **An Autonomous AI Multi-Agent Video Production Platform powered by Google Gemini.**
 
-🚀 **Live Demo:** [neuroclipstudio.com](https://neuroclipstudio.com)  
+🚀 **Live Demo:** [neuroclipstudio](https://neuroclip-studio.onrender.com/)  
 🎥 **Demo Video:** [Presentetion](https://youtu.be/HyqbQnbJVOI)
 
 🔒 **Testing Access Credentials:**
