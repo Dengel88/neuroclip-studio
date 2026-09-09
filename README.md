@@ -4,10 +4,9 @@
 🚀 **Live Demo:** [neuroclipstudio](https://neuroclip-studio.onrender.com/)  
 🎥 **Demo Video:** [Presentetion](https://youtu.be/HyqbQnbJVOI)
 
-🔒 **Testing Access Credentials:**
-To prevent API abuse, the live demo is protected by Basic Auth.
-- **Username:** `google`
-- **Password:** `REDACTED-CREDENTIAL`
+🔒 **Access:** the live demo is protected by HTTP Basic Auth to prevent API abuse.
+Credentials are provisioned per reviewer via `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` —
+see [`.env.example`](.env.example). They are not stored in this repository.
 
 Developed for the **Google AI Agent Hackathon**, Neuroclip Studio is an enterprise-grade agentic pipeline that transforms a simple text brief into a production-ready, highly technical cinematic storyboard using an orchestrated team of 4 specialized AI Agents.
 
@@ -97,9 +96,11 @@ python -m venv venv
 pip install -r requirements.txt
 
 1.Add your Google AI Studio keys:
-Create a .env file in the root directory. You can add multiple keys to test the API rotation feature:
-GEMINI_API_KEY_1=your_primary_api_key_here
-GEMINI_API_KEY_2=your_backup_api_key_here
+Copy `.env.example` to `.env` and fill in the values. Multiple Gemini keys enable the
+rotation/fallback path; `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` are mandatory - the app
+refuses to start without them.
+
+cp .env.example .env
 
 1.Run the application:
 python main.py

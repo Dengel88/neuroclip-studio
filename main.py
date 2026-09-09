@@ -31,9 +31,22 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 security = HTTPBasic()
 
+BASIC_AUTH_USER = os.getenv("BASIC_AUTH_USER", "")
+BASIC_AUTH_PASSWORD = os.getenv("BASIC_AUTH_PASSWORD", "")
+
+if not BASIC_AUTH_USER or not BASIC_AUTH_PASSWORD:
+    raise RuntimeError(
+        "BASIC_AUTH_USER and BASIC_AUTH_PASSWORD must be set before starting the app. "
+        "Copy .env.example to .env and fill them in. "
+        "Refusing to start with an open or default-credentialed endpoint."
+    )
+
+_EXPECTED_USER = BASIC_AUTH_USER.encode("utf-8")
+_EXPECTED_PASSWORD = BASIC_AUTH_PASSWORD.encode("utf-8")
+
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
-    correct_username = secrets.compare_digest(credentials.username, "google")
-    correct_password = secrets.compare_digest(credentials.password, "REDACTED-CREDENTIAL")
+    correct_username = secrets.compare_digest(credentials.username.encode("utf-8"), _EXPECTED_USER)
+    correct_password = secrets.compare_digest(credentials.password.encode("utf-8"), _EXPECTED_PASSWORD)
     if not (correct_username and correct_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
