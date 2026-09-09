@@ -1,19 +1,15 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "builds": [
-    {
-      "src": "main.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "50mb",
-        "includeFiles": "{config.yaml,index.html,prompts/**}"
-      }
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "**",
+      "maxDuration": 60
     }
-  ],
-  "routes": [
+  },
+  "rewrites": [
     {
-      "src": "/(.*)",
-      "dest": "main.py"
+      "source": "/(.*)",
+      "destination": "/api/index"
     }
   ]
 }

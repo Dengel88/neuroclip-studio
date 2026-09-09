@@ -167,8 +167,19 @@ def load_config(path: str | os.PathLike | None = None) -> AppConfig:
     next to this file. `$LLM_PROVIDER` then overrides `provider`.
     """
     resolved = Path(path or os.getenv("NEUROCLIP_CONFIG") or DEFAULT_CONFIG_PATH)
-    with open(resolved, "r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
+    try:
+        with open(resolved, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+    except FileNotFoundError as exc:
+        # On a serverless host this is the difference between a log line that
+        # names the missing file and an opaque FUNCTION_INVOCATION_FAILED.
+        neighbours = sorted(p.name for p in BASE_DIR.iterdir()) if BASE_DIR.exists() else []
+        raise RuntimeError(
+            f"Config file not found: {resolved}. "
+            f"Looked next to config.py ({BASE_DIR}), which contains: {neighbours}. "
+            "On Vercel this usually means vercel.json did not bundle config.yaml "
+            "into the function - check `functions[].includeFiles`."
+        ) from exc
 
     _apply_env_overrides(data)
     return AppConfig(**data)

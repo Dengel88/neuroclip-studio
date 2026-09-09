@@ -20,7 +20,16 @@ def render_prompt(filename: str, app_config: AppConfig | None = None) -> str:
     """Read `prompts/<filename>` and substitute every placeholder."""
     active = app_config or config
     path = Path(PROMPTS_DIR) / filename
-    raw = path.read_text(encoding="utf-8")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        available = sorted(p.name for p in Path(PROMPTS_DIR).glob("*")) if Path(
+            PROMPTS_DIR
+        ).exists() else "the prompts/ directory itself is missing"
+        raise RuntimeError(
+            f"Prompt file not found: {path}. Available: {available}. "
+            "On Vercel this means prompts/ was not bundled into the function."
+        ) from exc
     try:
         return Template(raw).substitute(active.prompt_variables())
     except KeyError as exc:
