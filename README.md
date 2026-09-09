@@ -1,107 +1,189 @@
-# 🎬 Neuroclip Studio
-**An Autonomous AI Multi-Agent Video Production Platform powered by Google Gemini.**
+# Neuroclip Studio
 
-🚀 **Live Demo:** [neuroclipstudio](https://neuroclip-studio.onrender.com/)  
-🎥 **Demo Video:** [Presentetion](https://youtu.be/HyqbQnbJVOI)
+A multi-agent pipeline that turns a one-line video brief into a storyboard and a
+set of technical prompts for a video generation model.
 
-🔒 **Access:** the live demo is protected by HTTP Basic Auth to prevent API abuse.
-Credentials are provisioned per reviewer via `BASIC_AUTH_USER` / `BASIC_AUTH_PASSWORD` —
-see [`.env.example`](.env.example). They are not stored in this repository.
+Four agents run in sequence — scriptwriter, storyboarder, prompt engineer, VFX
+supervisor — behind a FastAPI backend and a single-page UI. The interesting part
+is not the agent chain; it is that **the pipeline checks its own output in code**
+and repairs it before the user ever sees it.
 
-Developed for the **Google AI Agent Hackathon**, Neuroclip Studio is an enterprise-grade agentic pipeline that transforms a simple text brief into a production-ready, highly technical cinematic storyboard using an orchestrated team of 4 specialized AI Agents.
+---
 
-## 🏗️ Architecture Diagram
+## What is actually enforced
 
-```mermaid
-graph TD
-    User([User Brief]) --> UI[Neuroclip Studio UI]
-    
-    UI -->|Step 1| A1[Agent 1: Scriptwriter<br>Gemini 3.5 Flash]
-    A1 -->|Strict JSON Concepts| UI
-    
-    UI -->|Step 2| A2[Agent 2: Storyboarder<br>Gemini 3.5 Flash]
-    A2 -->|Math Constraints & Hard Cuts| UI
-    
-    UI -->|Step 3| A3[Agent 3: Prompt Engineer<br>Gemini 3.5 Flash]
-    A3 --> Router{Router Logic}
-    Router -->|Text-to-Video| T2V[6-Dimension Omni Prompt]
-    Router -->|Image-to-Video| I2V[Nano Bana Pro Image Prompt <br>+ Omni Video Prompt]
-    T2V --> UI
-    I2V --> UI
-    
-    UI -->|Step 4: User Edits| A4[Agent 4: VFX Supervisor<br>Gemini 3.5 Flash]
-    A4 -->|5-Rule Optimized Edit Prompt| UI
+An LLM asked for a 30-second video in 4/6/8-second clips will occasionally hand
+back scenes that add up to 28. Asking nicely in the prompt is not a control. So
+every rule lives twice: once in the prompt (rendered from `config.yaml`) and once
+in [`domain.py`](domain.py), which decides whether an answer is acceptable.
+
+| Rule | Enforced in |
+|---|---|
+| Scene durations sum to exactly the requested total | `domain.validate_storyboard` |
+| Every clip length is one the renderer can produce (`4/6/8s`) | `domain.validate_storyboard` |
+| Scenes numbered `1..n` with no gaps, count under the cap | `domain.validate_storyboard` |
+| One prompt per scene, `omni_duration` matches the storyboard | `domain.validate_prompts` |
+| Every prompt carries all six template dimensions | `domain.validate_prompts` |
+| `image-to-video` scenes actually carry a reference-frame prompt | `domain.validate_prompts` |
+| The brief is satisfiable at all before any model call | `domain.assert_brief_feasible` |
+
+The last one is worth a sentence: a 15-second video cannot be built from 4/6/8
+second clips, whatever the model says. That is a coin-problem check, so the
+request is refused in milliseconds for zero API spend rather than after three
+failed repair attempts.
+
+When a check fails, `PipelineOrchestrator._generate_validated` asks again with
+the failure reason appended to the prompt (`repair.max_attempts` in the config).
+When the attempts run out the endpoint returns **502 with the actual reason**,
+not a generic error.
+
+## Architecture
+
+```
+index.html            single-page UI; holds a session id, nothing else
+  |
+main.py               auth, rate limiting, sessions, HTTP <-> domain error mapping
+  |
+pipeline.py           PipelineState + stages + repair loop + regenerate_scene
+  |
+domain.py             the rules, in code
+  |
+llm/                  base.py (interface) | gemini.py | mock.py | factory.py
+  |
+config.yaml           models, temperatures, retries, domain constants
+prompts/*.md          system instructions with $placeholders filled from config
 ```
 
----
+**State is server-side.** `PipelineState` holds the brief, the concepts, the
+chosen one, the storyboard, the prompts and an audit trail. That is what makes
+`regenerate_scene(state, n)` possible: one shot is re-generated, its duration is
+held fixed so the total stays valid, the stale prompt for that scene is dropped,
+and every other scene is untouched. There is a test that asserts exactly that.
 
-## 🧠 Core Architecture & Agentic Workflow
+**Transport failures and validation failures are different things.**
+`GeminiProvider` retries and rotates keys on 429/503/timeouts with exponential
+backoff and jitter; a `ValidationError` is raised straight through to the repair
+loop instead. Conflating them means one malformed JSON answer burns every API key
+in the pool and arrives as an error the repair loop cannot recognise —
+`tests/test_provider.py::test_validation_error_does_not_consume_keys` pins this.
 
-Neuroclip Studio replaces the chaotic traditional video production pipeline with a sequential, human-in-the-loop Agentic Workflow. We leverage the blazing speed and reasoning capabilities of **Gemini 3.5 Flash**.
+Error classification is explicit: `429/503/…` → retry, `401/403` → next key,
+`404` → next model in the chain, `400` → abort immediately.
 
-All inter-agent communication is strictly validated using **Pydantic Models** (Structured JSON Outputs) to ensure zero hallucination and perfect data flow across the pipeline.
+## Setup
 
-### The 4 AI Agents:
-
-1. **🎭 Agent 1: The Scriptwriter**
-   - Ingests the user's brief (Format, Duration, Goal, Audience, Core Idea).
-   - Generates 3 distinct, highly visual concepts formatted as strict JSON.
-   - *Constraint applied:* Avoids text-heavy concepts that video diffusion models struggle to render, focusing on cinematic metaphors.
-
-2. **🎞️ Agent 2: The Storyboarder**
-   - Takes the selected concept and breaks it down into a precise shot-by-shot storyboard.
-   - *Mathematical Constraint:* Ensures the sum of all scene durations perfectly matches the requested total duration, strictly using chunks supported by Omni (4, 6, 8, or 10 seconds).
-   - *Directing Rule:* Applies "Hard Cuts Only" to prevent continuous motion breakage between separately generated video clips.
-
-3. **🎥 Agent 3: The Prompt Engineer**
-   - Translates raw scene descriptions into highly technical **6-dimension prompts** (Camera, Style, Lighting, Scene, Action & Audio, Text).
-   - *Dynamic Router Logic:* Automatically decides between `text-to-video` and `image-to-video` depending on focal complexity. If high fidelity is needed, it dynamically writes an Image Prompt for **Nano Bana Pro** to be used as a reference frame.
-
-4. **🪄 Agent 4: The VFX Supervisor**
-   - Handles the Human-in-the-Loop editing system.
-   - Takes raw user edit requests (e.g., "Make it rain") and reframes them using **Omni's strict 5 Rules of Editing** (Anchor Rule, Before->After, Layering, Time-tagging, Audio Sync) to prevent the diffusion model from hallucinating or breaking the original composition.
-
----
-
-## 💎 Enterprise Features
-
-- **API Key Rotation & Load Balancing:** Built-in router that catches `429 Resource Exhausted` or `503 Service Unavailable` errors and seamlessly falls back to backup API keys to ensure uninterrupted service.
-- **Copy-to-Clipboard Flow:** UX optimized for rapid prompt transfer to external generative video engines.
-- **Strict Data Validation:** 100% Pydantic schema enforcement on every LLM response.
-
----
-
-## ⚠️ Hackathon Scope & Limitations (Honesty Badge)
-
-**Note on Video Rendering:**
-The core focus of our submission is the **Agentic Prompt Engineering pipeline** (Agents 1 through 4) powered by the Gemini API. 
-
-Because generating high-fidelity video via native diffusion models takes significant time and requires background task queues (like Celery/Redis) which exceed the hackathon's prototyping scope, the final "Generate Video" button currently triggers a **simulated UI response**. The frontend mocks the asynchronous webhook flow and displays a pre-rendered placeholder video to demonstrate UX state handling. 
-
-*The Agentic brain is 100% real and dynamic; the final rendering muscle is mocked for demonstration purposes.*
-
----
-
-## 🚀 How to Run Locally
-
-1. Clone the repository and navigate to the folder:
 ```bash
-git clone https://github.com/your-username/neuroclip-studio.git
-
-1.Create a virtual environment and install dependencies:
-
-python -m venv venv
-# On Windows: venv\Scripts\activate
-# On Mac/Linux: source venv/bin/activate
+cp .env.example .env       # fill in BASIC_AUTH_* and at least GEMINI_API_KEY_1
+python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate
 pip install -r requirements.txt
-
-1.Add your Google AI Studio keys:
-Copy `.env.example` to `.env` and fill in the values. Multiple Gemini keys enable the
-rotation/fallback path; `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD` are mandatory - the app
-refuses to start without them.
-
-cp .env.example .env
-
-1.Run the application:
 python main.py
-Open your browser and navigate to http://127.0.0.1:8000.
+```
+
+The app **refuses to start** without `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`.
+There are no default credentials. See [`.env.example`](.env.example).
+
+Run it offline, with no API key at all:
+
+```bash
+LLM_PROVIDER=mock python main.py
+```
+
+## Swapping the model
+
+`config.yaml` is the only place a model name appears. To move the whole pipeline
+onto a different model, edit the chain:
+
+```yaml
+models:
+  chains:
+    reasoning:
+      - gemini-3.1-pro-preview   # primary
+      - gemini-3.5-flash         # fallback
+```
+
+No Python file mentions a model name. Temperatures, retry policy, repair
+attempts, session TTL, rate limits and the domain constants live in the same
+file — and `tests/test_config_and_prompts.py::test_changing_the_config_changes_the_prompt`
+verifies that a change there actually reaches the rendered prompt.
+
+To add a provider: implement `llm/base.py::LLMProvider`, add one line to
+`llm/factory.py`. Agents never import `google.genai`.
+
+## Tests
+
+```bash
+pytest
+```
+
+100 tests, no network. Coverage is aimed at the things that broke before:
+placeholder substitution, the duration validator, key rotation against faked
+429/503/404/400 responses, the transport-vs-validation split, repair-loop
+recovery and exhaustion, targeted retakes, session expiry and eviction, rate
+limiting, and the HTTP contract the frontend depends on.
+
+## Evals
+
+```bash
+python evals/run.py                 # offline, deterministic, free
+python evals/run.py --provider gemini   # spends real API quota
+```
+
+11 briefs: 8 that must succeed (10s reel through 120s long-form, plus `14s`
+which forces awkward arithmetic) and 3 that must be **refused** — an impossible
+15s total, an unsupported aspect ratio, and a sub-minimum duration. A refusal is
+only counted as a pass if it cost zero model calls.
+
+Latest run on the mock provider:
+
+```
+CASE                       EXPECT   RESULT   DETAIL
+short_reel                 pass     PASS     duration_sum=10s == 10s, scene_count=2, dimensions=all present
+minute_explainer           pass     PASS     duration_sum=60s == 60s, scene_count=8, dimensions=all present
+character_scene            pass     PASS     duration_sum=30s == 30s, scene_count=4, dimensions=all present
+square_social              pass     PASS     duration_sum=24s == 24s, scene_count=3, dimensions=all present
+minimum_length             pass     PASS     duration_sum=4s == 4s,   scene_count=1, dimensions=all present
+awkward_arithmetic         pass     PASS     duration_sum=14s == 14s, scene_count=2, dimensions=all present
+long_form                  pass     PASS     duration_sum=120s == 120s, scene_count=15, dimensions=all present
+text_heavy_brief           pass     PASS     duration_sum=20s == 20s, scene_count=3, dimensions=all present
+impossible_odd_duration    reject   PASS     rejected: 15s cannot be composed from [4, 6, 8]; cost=0 model calls
+unsupported_aspect_ratio   reject   PASS     rejected: 21:9 not supported; cost=0 model calls
+below_minimum_duration     reject   PASS     rejected: outside 4-300s; cost=0 model calls
+
+Pass rate: 11/11 (100.0%)
+```
+
+Reports are written to `evals/results/` (gitignored). The runner exits non-zero
+below 100%, so it works as a CI gate. Numbers above are from the mock provider —
+they verify the pipeline's own guarantees, not Gemini's creative quality.
+
+## Security notes
+
+- No credentials in code or in this README; the app refuses to start without them.
+- `secrets.compare_digest` for the auth comparison.
+- Input length and range limits come from `config.yaml` (`limits.*`, `domain.*`)
+  and are enforced by the request models, so the advertised bound is the enforced
+  bound (`tests/test_api.py::test_oversized_input_is_rejected`).
+- Per-user + per-IP fixed-window rate limiting, with a tighter window on the
+  expensive generation endpoints.
+- Sessions are TTL-bounded *and* capacity-bounded — an unbounded session dict is
+  a memory-exhaustion vector.
+- API keys never reach the logs, not even partially; log lines carry a key index.
+- Model output is HTML-escaped before it is interpolated into the page.
+
+## Limitations
+
+These are real and deliberate, not oversights:
+
+- **In-memory sessions.** Restarting the process drops every in-flight pipeline,
+  and the store is per-worker. Production wants Redis.
+- **In-process rate limiting.** Same caveat: it protects one instance's key
+  budget, not a fleet.
+- **Ephemeral image storage.** `images.storage: static` writes JPEGs to `static/`
+  and cleans them up after `retention_seconds`. On a host with an ephemeral or
+  read-only filesystem, switch to `images.storage: base64` — the bytes come back
+  inline and nothing touches the disk.
+- **The final render is a showcase.** Full video synthesis is not wired up; the
+  "Render" button plays a pre-rendered clip. The pipeline produces prompts, not
+  video.
+- **Eval numbers measure the pipeline, not the model.** They prove the contracts
+  hold; they say nothing about whether the storyboard is any good.
