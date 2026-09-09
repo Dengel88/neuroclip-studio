@@ -1,0 +1,112 @@
+# Eval briefs.
+#
+# `expect: pass` - the pipeline must produce a storyboard and prompts that
+#   satisfy every rule in domain.py.
+# `expect: reject` - the brief is unsatisfiable and the pipeline must say so
+#   *before* spending a model call. Silently returning something plausible for
+#   these is the failure mode this suite is built to catch.
+
+cases:
+  - id: short_reel
+    expect: pass
+    video_format: "9:16"
+    total_duration: 10
+    business_goal: Viral awareness
+    target_audience: Gen Z
+    topic_idea: Quick coffee brewing hack in a tiny kitchen
+    needs_voiceover: false
+
+  - id: minute_explainer
+    expect: pass
+    video_format: "16:9"
+    total_duration: 60
+    business_goal: Product explanation
+    target_audience: B2B engineering managers
+    topic_idea: An AI agent orchestrator that plans and validates its own output
+    needs_voiceover: true
+
+  - id: character_scene
+    expect: pass
+    video_format: "16:9"
+    total_duration: 30
+    business_goal: Brand storytelling
+    target_audience: Young adults
+    topic_idea: A detective solving a neon city mystery, same face in every shot
+    needs_voiceover: false
+
+  - id: square_social
+    expect: pass
+    video_format: "1:1"
+    total_duration: 24
+    business_goal: Lead generation
+    target_audience: Small business owners
+    topic_idea: Bookkeeping software that files taxes while you sleep
+    needs_voiceover: true
+
+  - id: minimum_length
+    expect: pass
+    video_format: "9:16"
+    total_duration: 4
+    business_goal: Brand awareness
+    target_audience: Everyone
+    topic_idea: A single hero shot of a running shoe hitting wet asphalt
+    needs_voiceover: false
+
+  - id: awkward_arithmetic
+    expect: pass
+    video_format: "16:9"
+    total_duration: 14
+    business_goal: Retention
+    target_audience: Existing customers
+    topic_idea: Three product features shown as three separate hard cuts
+    needs_voiceover: false
+
+  - id: long_form
+    expect: pass
+    video_format: "16:9"
+    total_duration: 120
+    business_goal: Conference opener
+    target_audience: Industry analysts
+    topic_idea: The history of generative video told through evolving film grain
+    needs_voiceover: true
+
+  - id: text_heavy_brief
+    expect: pass
+    video_format: "9:16"
+    total_duration: 20
+    business_goal: Conversion
+    target_audience: Recruiters
+    topic_idea: A dashboard UI with dense readable text and small charts
+    needs_voiceover: false
+
+  # -- briefs the pipeline must refuse ------------------------------------
+
+  - id: impossible_odd_duration
+    expect: reject
+    reason: 15s cannot be built from 4/6/8s clips
+    video_format: "1:1"
+    total_duration: 15
+    business_goal: Lead gen
+    target_audience: Retirement home residents
+    topic_idea: Extremely fast paced hyperpop music video
+    needs_voiceover: true
+
+  - id: unsupported_aspect_ratio
+    expect: reject
+    reason: 21:9 is not in domain.supported_aspect_ratios
+    video_format: "21:9"
+    total_duration: 30
+    business_goal: Cinema trailer
+    target_audience: Film fans
+    topic_idea: An anamorphic desert chase
+    needs_voiceover: false
+
+  - id: below_minimum_duration
+    expect: reject
+    reason: shorter than domain.min_total_duration
+    video_format: "16:9"
+    total_duration: 2
+    business_goal: Bumper
+    target_audience: Everyone
+    topic_idea: A logo sting
+    needs_voiceover: false
