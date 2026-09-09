@@ -87,10 +87,46 @@ class FixedWindowLimiter:
 
 
 limiter = FixedWindowLimiter()
-session_store = build_session_store(config, SESSION_SECRET) if (
-    config.sessions.backend == "memory" or SESSION_SECRET
-) else None
 orchestrator = PipelineOrchestrator()
+
+
+def startup_problems() -> list[str]:
+    """Misconfigurations that stop the app doing useful work.
+
+    Collected rather than raised. A deployment that dies at import returns an
+    opaque 500 and tells the operator nothing; one that starts and *says* what
+    is missing can be fixed without digging through platform logs.
+    """
+    problems: list[str] = []
+    if config.sessions.backend == "stateless" and not SESSION_SECRET:
+        problems.append(
+            "SESSION_SECRET is not set, and sessions.backend is 'stateless' "
+            "(the default on serverless hosts). Generate one with "
+            '`python -c "import secrets; print(secrets.token_hex(32))"` and add '
+            "it to the environment."
+        )
+    if config.provider == "gemini" and not any(
+        os.getenv(f"GEMINI_API_KEY_{i}") for i in range(1, 10)
+    ):
+        problems.append(
+            "No GEMINI_API_KEY_1..9 found in the environment. Add at least one, "
+            "or set LLM_PROVIDER=mock to run offline."
+        )
+    return problems
+
+
+PROBLEMS = startup_problems()
+# With a broken config the store cannot be built; endpoints answer 503 with the
+# reason instead, and the page itself still loads.
+session_store = None if PROBLEMS else build_session_store(config, SESSION_SECRET)
+
+
+def require_ready() -> None:
+    if PROBLEMS:
+        raise HTTPException(
+            status_code=503,
+            detail="The deployment is not configured yet: " + " | ".join(PROBLEMS),
+        )
 
 
 def client_key(request: Request) -> str:
@@ -174,16 +210,13 @@ async def _image_housekeeping() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if session_store is None:
-        raise RuntimeError(
-            "SESSION_SECRET must be set when sessions.backend is 'stateless'. "
-            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
-        )
+    for problem in PROBLEMS:
+        logger.error("startup.misconfigured %s", problem)
     # Turn a broken prompt placeholder into a startup failure, not a 500 later.
     preload_all_prompts()
     logger.info(
-        "startup provider=%s sessions=%s images=%s",
-        config.provider, config.sessions.backend, config.images.storage,
+        "startup provider=%s sessions=%s images=%s ready=%s",
+        config.provider, config.sessions.backend, config.images.storage, not PROBLEMS,
     )
     tasks = []
     if isinstance(session_store, MemorySessionStore):
@@ -268,11 +301,13 @@ async def read_root(caller: str = Depends(read_guard)):
 
 @app.get("/api/health")
 async def health():
+    """Deployment self-report. The first thing to curl when a host misbehaves."""
     return {
-        "status": "ok",
+        "status": "ok" if not PROBLEMS else "misconfigured",
         "provider": config.provider,
         "sessions_backend": config.sessions.backend,
         "images_storage": config.images.storage,
+        "problems": PROBLEMS,
     }
 
 
@@ -288,7 +323,11 @@ async def public_config(caller: str = Depends(read_guard)):
 
 
 @app.post("/api/generate-concepts")
-async def generate_concepts(request: ScriptwriterInput, caller: str = Depends(generate_guard)):
+async def generate_concepts(
+    request: ScriptwriterInput,
+    caller: str = Depends(generate_guard),
+    _ready: None = Depends(require_ready),
+):
     state = PipelineState(**request.model_dump())
     state = await orchestrator.generate_concepts(state)
     session_id = session_store.create(state)
@@ -298,7 +337,11 @@ async def generate_concepts(request: ScriptwriterInput, caller: str = Depends(ge
 
 
 @app.post("/api/generate-storyboard")
-async def generate_storyboard(request: StoryboardRequest, caller: str = Depends(generate_guard)):
+async def generate_storyboard(
+    request: StoryboardRequest,
+    caller: str = Depends(generate_guard),
+    _ready: None = Depends(require_ready),
+):
     state = session_store.get(request.session_id)
     state.selected_concept_id = request.concept_id
     state = await orchestrator.generate_storyboard(state)
@@ -309,7 +352,11 @@ async def generate_storyboard(request: StoryboardRequest, caller: str = Depends(
 
 
 @app.post("/api/regenerate-scene")
-async def regenerate_scene(request: RegenerateSceneRequest, caller: str = Depends(generate_guard)):
+async def regenerate_scene(
+    request: RegenerateSceneRequest,
+    caller: str = Depends(generate_guard),
+    _ready: None = Depends(require_ready),
+):
     state = session_store.get(request.session_id)
     state = await orchestrator.regenerate_scene(state, request.scene_number, request.note)
     session_id = session_store.update(request.session_id, state)
@@ -319,7 +366,11 @@ async def regenerate_scene(request: RegenerateSceneRequest, caller: str = Depend
 
 
 @app.post("/api/generate-prompts")
-async def generate_prompts(request: PromptsRequest, caller: str = Depends(generate_guard)):
+async def generate_prompts(
+    request: PromptsRequest,
+    caller: str = Depends(generate_guard),
+    _ready: None = Depends(require_ready),
+):
     state = session_store.get(request.session_id)
     _apply_scene_edits(state, request.scene_descriptions)
     state = await orchestrator.generate_prompts(state)
@@ -340,7 +391,11 @@ async def generate_prompts(request: PromptsRequest, caller: str = Depends(genera
 
 
 @app.post("/api/format-edit-prompt", response_model=VideoEditOutput)
-async def format_edit_prompt(request: VideoEditInput, caller: str = Depends(generate_guard)):
+async def format_edit_prompt(
+    request: VideoEditInput,
+    caller: str = Depends(generate_guard),
+    _ready: None = Depends(require_ready),
+):
     agent = config.agents.vfx_supervisor
     provider = get_llm_provider(config.provider)
     user = (

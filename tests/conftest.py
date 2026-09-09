@@ -19,6 +19,9 @@ sys.path.insert(0, str(ROOT))
 # Set before `main` is imported: the stateless session backend needs a signing
 # secret, and the tests exercise both backends.
 os.environ.setdefault("SESSION_SECRET", "test-secret-not-used-anywhere-real")
+# The suite never touches the network, so the offline provider is the default.
+# It also keeps the app's own readiness check satisfied without a fake API key.
+os.environ.setdefault("LLM_PROVIDER", "mock")
 
 from config import load_config  # noqa: E402
 from llm.mock import MockProvider  # noqa: E402

@@ -262,3 +262,47 @@ def test_image_cleanup_removes_only_old_files(monkeypatch, tmp_path):
 
     assert main.cleanup_images() == 1
     assert fresh.exists() and not stale.exists()
+
+
+# -- readiness -----------------------------------------------------------
+# A misconfigured deployment must say so. Returning an opaque 500 is how a
+# missing SESSION_SECRET turned into three rounds of guessing at the logs.
+
+
+def test_health_reports_missing_configuration(client, monkeypatch):
+    monkeypatch.setattr(main, "PROBLEMS", ["SESSION_SECRET is not set"])
+    body = client.get("/api/health").json()
+    assert body["status"] == "misconfigured"
+    assert body["problems"] == ["SESSION_SECRET is not set"]
+
+
+def test_page_still_loads_when_misconfigured(client, monkeypatch):
+    """The operator should see the app, not a blank platform error page."""
+    monkeypatch.setattr(main, "PROBLEMS", ["SESSION_SECRET is not set"])
+    assert client.get("/").status_code == 200
+
+
+def test_generation_is_503_with_the_reason_when_misconfigured(client, monkeypatch):
+    monkeypatch.setattr(main, "PROBLEMS", ["SESSION_SECRET is not set"])
+    response = client.post("/api/generate-concepts", json=BRIEF)
+    assert response.status_code == 503
+    assert "SESSION_SECRET" in response.json()["detail"]
+
+
+def test_startup_problems_detects_a_bare_serverless_deployment(monkeypatch):
+    monkeypatch.setattr(main, "SESSION_SECRET", "")
+    monkeypatch.setattr(config.sessions, "backend", "stateless")
+    monkeypatch.setattr(config, "provider", "gemini")
+    for i in range(1, 10):
+        monkeypatch.delenv(f"GEMINI_API_KEY_{i}", raising=False)
+
+    problems = main.startup_problems()
+    assert any("SESSION_SECRET" in p for p in problems)
+    assert any("GEMINI_API_KEY" in p for p in problems)
+
+
+def test_startup_problems_is_empty_when_configured(monkeypatch):
+    monkeypatch.setattr(main, "SESSION_SECRET", "a-secret")
+    monkeypatch.setattr(config.sessions, "backend", "stateless")
+    monkeypatch.setattr(config, "provider", "mock")
+    assert main.startup_problems() == []

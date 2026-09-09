@@ -133,9 +133,16 @@ default.
 `requirements.txt` carries runtime dependencies only; test tooling lives in
 `requirements-dev.txt` and is not shipped into the bundle.
 
-Missing bundled files fail loudly: `config.py` and `prompt_loader.py` report
-which file was expected and what was actually present, rather than letting the
-function die with an opaque `FUNCTION_INVOCATION_FAILED`.
+A misconfigured deployment explains itself instead of failing blank. Missing
+bundled files report which file was expected and what the directory actually
+held; a missing `SESSION_SECRET` or API key does not kill the process - the page
+still loads, `GET /api/health` returns `status: misconfigured` with the list of
+problems, and generation endpoints answer 503 naming what to set:
+
+```bash
+curl -s https://<your-deployment>/api/health
+{"status":"misconfigured","problems":["SESSION_SECRET is not set, ..."]}
+```
 
 Nothing writes to disk at import time. The pre-refactor version called
 `os.makedirs("static")` while the module was loading, which on a read-only
@@ -170,12 +177,13 @@ To add a provider: implement `llm/base.py::LLMProvider`, add one line to
 pytest
 ```
 
-135 tests, no network. Coverage is aimed at the things that broke before:
+143 tests, no network. Coverage is aimed at the things that broke before:
 placeholder substitution, the duration validator, key rotation against faked
 429/503/404/400 responses, the transport-vs-validation split, repair-loop
 recovery and exhaustion, targeted retakes, session expiry, eviction, token
-forgery and tampering, rate limiting, and the HTTP contract the frontend
-depends on - the API tests run against both session backends.
+forgery and tampering, rate limiting, deployment readiness reporting, and the
+HTTP contract the frontend depends on - the API tests run against both session
+backends.
 
 ## Evals
 
