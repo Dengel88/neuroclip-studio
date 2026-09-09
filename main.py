@@ -1,8 +1,12 @@
 """HTTP layer.
 
-Endpoints are thin: they authenticate, rate-limit, look up the session and hand
-over to `pipeline.py`. All business rules live in `domain.py`, all model access
-in `llm/`.
+Endpoints are thin: they rate-limit, look up the session and hand over to
+`pipeline.py`. All business rules live in `domain.py`, all model access in
+`llm/`, all session storage in `sessions.py`.
+
+The demo is deliberately open - no login. That makes the rate limiter the only
+thing standing between a stranger with the URL and the API budget, so it is on
+by default and keyed by client IP.
 """
 
 from __future__ import annotations
@@ -13,7 +17,6 @@ import logging
 import os
 import secrets
 import time
-import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
@@ -21,7 +24,6 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
 from config import BASE_DIR, config
@@ -42,73 +44,14 @@ from models import (
 )
 from pipeline import PipelineOrchestrator, PipelineState
 from prompt_loader import load_prompt, preload_all_prompts
+from sessions import MemorySessionStore, build_session_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
 logger = logging.getLogger("NeuroclipStudio.API")
 
 load_dotenv()
 
-BASIC_AUTH_USER = os.getenv("BASIC_AUTH_USER", "")
-BASIC_AUTH_PASSWORD = os.getenv("BASIC_AUTH_PASSWORD", "")
-_MISSING_CREDENTIALS_MESSAGE = (
-    "BASIC_AUTH_USER and BASIC_AUTH_PASSWORD must be set before starting the app. "
-    "Copy .env.example to .env and fill them in. "
-    "Refusing to serve an endpoint with open or default credentials."
-)
-
-
-# ===========================================================================
-# Sessions
-# ===========================================================================
-
-
-class SessionStore:
-    """In-memory pipeline state, TTL-bounded and capacity-bounded.
-
-    Production needs Redis - see the README. The cap matters even here: without
-    it an unauthenticated flood of step-1 requests is an unbounded memory leak.
-    """
-
-    def __init__(self, ttl_seconds: int, max_sessions: int):
-        self.ttl = ttl_seconds
-        self.max_sessions = max_sessions
-        self._sessions: Dict[str, dict] = {}
-
-    def create(self, state: PipelineState) -> str:
-        self.sweep()
-        if len(self._sessions) >= self.max_sessions:
-            # Evict the session closest to expiry rather than refusing service.
-            oldest = min(self._sessions, key=lambda k: self._sessions[k]["expires"])
-            del self._sessions[oldest]
-            logger.warning("session.evicted reason=capacity max=%d", self.max_sessions)
-        session_id = str(uuid.uuid4())
-        self._sessions[session_id] = {
-            "state": state,
-            "expires": time.monotonic() + self.ttl,
-        }
-        return session_id
-
-    def get(self, session_id: str) -> PipelineState:
-        session = self._sessions.get(session_id)
-        if session is None or session["expires"] < time.monotonic():
-            self._sessions.pop(session_id, None)
-            raise HTTPException(status_code=404, detail="Session not found or expired.")
-        session["expires"] = time.monotonic() + self.ttl
-        return session["state"]
-
-    def update(self, session_id: str, state: PipelineState) -> None:
-        if session_id in self._sessions:
-            self._sessions[session_id]["state"] = state
-
-    def sweep(self) -> int:
-        now = time.monotonic()
-        expired = [k for k, v in self._sessions.items() if v["expires"] < now]
-        for key in expired:
-            del self._sessions[key]
-        return len(expired)
-
-    def __len__(self) -> int:
-        return len(self._sessions)
+SESSION_SECRET = os.getenv("SESSION_SECRET", "")
 
 
 # ===========================================================================
@@ -120,7 +63,8 @@ class FixedWindowLimiter:
     """Per-caller fixed-window counter.
 
     Deliberately simple and in-process: it protects the API-key budget of a
-    single instance, not a fleet. Behind more than one worker, move it to Redis.
+    single instance, not a fleet. Behind more than one worker or on serverless,
+    each instance counts separately - see the README.
     """
 
     def __init__(self, window_seconds: int = 60):
@@ -143,51 +87,45 @@ class FixedWindowLimiter:
 
 
 limiter = FixedWindowLimiter()
-session_store = SessionStore(config.sessions.ttl_seconds, config.sessions.max_sessions)
+session_store = build_session_store(config, SESSION_SECRET) if (
+    config.sessions.backend == "memory" or SESSION_SECRET
+) else None
 orchestrator = PipelineOrchestrator()
 
 
-def verify_credentials(credentials: HTTPBasicCredentials = Depends(HTTPBasic())) -> str:
-    if not BASIC_AUTH_USER or not BASIC_AUTH_PASSWORD:
-        # Belt and braces: startup already refuses, this closes the door if the
-        # app is ever mounted into another ASGI application.
-        logger.error("auth.misconfigured")
-        raise HTTPException(status_code=503, detail="Authentication is not configured.")
-    correct_user = secrets.compare_digest(
-        credentials.username.encode("utf-8"), BASIC_AUTH_USER.encode("utf-8")
-    )
-    correct_password = secrets.compare_digest(
-        credentials.password.encode("utf-8"), BASIC_AUTH_PASSWORD.encode("utf-8")
-    )
-    if not (correct_user and correct_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Basic"},
-        )
-    return credentials.username
+def client_key(request: Request) -> str:
+    """Identify the caller for rate limiting.
+
+    Behind Vercel and most proxies the socket address is the proxy, so the
+    first hop of X-Forwarded-For is the real client. It is spoofable by
+    definition - this is a budget guard, not an access control.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def rate_limit(bucket: str, limit_attribute: str):
-    """Dependency factory: one counter per bucket, per authenticated user + IP.
+    """Dependency factory: one counter per bucket, per client.
 
     The limit is read from the config on every request rather than captured
     here, so the configured number is the number actually enforced.
     """
 
-    def dependency(request: Request, username: str = Depends(verify_credentials)) -> str:
+    def dependency(request: Request) -> str:
+        caller = client_key(request)
         if not config.rate_limit.enabled:
-            return username
+            return caller
         limit = getattr(config.rate_limit, limit_attribute)
-        client = request.client.host if request.client else "unknown"
-        if not limiter.check(f"{bucket}:{username}:{client}", limit):
-            logger.warning("ratelimit.rejected bucket=%s user=%s", bucket, username)
+        if not limiter.check(f"{bucket}:{caller}", limit):
+            logger.warning("ratelimit.rejected bucket=%s", bucket)
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Rate limit exceeded: at most {limit} {bucket} requests per minute.",
                 headers={"Retry-After": "60"},
             )
-        return username
+        return caller
 
     return dependency
 
@@ -218,7 +156,7 @@ def cleanup_images(now: Optional[float] = None) -> int:
     return removed
 
 
-async def _housekeeping() -> None:
+async def _session_housekeeping() -> None:
     while True:
         await asyncio.sleep(config.sessions.sweep_interval_seconds)
         expired = session_store.sweep()
@@ -236,12 +174,20 @@ async def _image_housekeeping() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not BASIC_AUTH_USER or not BASIC_AUTH_PASSWORD:
-        raise RuntimeError(_MISSING_CREDENTIALS_MESSAGE)
+    if session_store is None:
+        raise RuntimeError(
+            "SESSION_SECRET must be set when sessions.backend is 'stateless'. "
+            'Generate one with: python -c "import secrets; print(secrets.token_hex(32))"'
+        )
     # Turn a broken prompt placeholder into a startup failure, not a 500 later.
     preload_all_prompts()
-    logger.info("startup provider=%s sessions_ttl=%ds", config.provider, config.sessions.ttl_seconds)
-    tasks = [asyncio.create_task(_housekeeping())]
+    logger.info(
+        "startup provider=%s sessions=%s images=%s",
+        config.provider, config.sessions.backend, config.images.storage,
+    )
+    tasks = []
+    if isinstance(session_store, MemorySessionStore):
+        tasks.append(asyncio.create_task(_session_housekeeping()))
     if config.images.storage == "static":
         tasks.append(asyncio.create_task(_image_housekeeping()))
     try:
@@ -304,7 +250,7 @@ async def _provider_failed(request: Request, exc: ProviderError):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root(username: str = Depends(read_guard)):
+async def read_root(caller: str = Depends(read_guard)):
     return (BASE_DIR / "index.html").read_text(encoding="utf-8")
 
 
@@ -313,12 +259,13 @@ async def health():
     return {
         "status": "ok",
         "provider": config.provider,
-        "sessions": len(session_store),
+        "sessions_backend": config.sessions.backend,
+        "images_storage": config.images.storage,
     }
 
 
 @app.get("/api/config")
-async def public_config(username: str = Depends(read_guard)):
+async def public_config(caller: str = Depends(read_guard)):
     """Domain constraints the browser needs, so no constant is duplicated there."""
     return {
         "allowed_scene_durations": config.domain.allowed_scene_durations,
@@ -329,9 +276,7 @@ async def public_config(username: str = Depends(read_guard)):
 
 
 @app.post("/api/generate-concepts")
-async def generate_concepts(
-    request: ScriptwriterInput, username: str = Depends(generate_guard)
-):
+async def generate_concepts(request: ScriptwriterInput, caller: str = Depends(generate_guard)):
     state = PipelineState(**request.model_dump())
     state = await orchestrator.generate_concepts(state)
     session_id = session_store.create(state)
@@ -341,53 +286,49 @@ async def generate_concepts(
 
 
 @app.post("/api/generate-storyboard")
-async def generate_storyboard(
-    request: StoryboardRequest, username: str = Depends(generate_guard)
-):
+async def generate_storyboard(request: StoryboardRequest, caller: str = Depends(generate_guard)):
     state = session_store.get(request.session_id)
     state.selected_concept_id = request.concept_id
     state = await orchestrator.generate_storyboard(state)
-    session_store.update(request.session_id, state)
+    session_id = session_store.update(request.session_id, state)
     return JSONResponse(
-        content={
-            "session_id": request.session_id,
-            "scenes": [s.model_dump() for s in state.scenes],
-        }
+        content={"session_id": session_id, "scenes": [s.model_dump() for s in state.scenes]}
     )
 
 
 @app.post("/api/regenerate-scene")
-async def regenerate_scene(
-    request: RegenerateSceneRequest, username: str = Depends(generate_guard)
-):
+async def regenerate_scene(request: RegenerateSceneRequest, caller: str = Depends(generate_guard)):
     state = session_store.get(request.session_id)
     state = await orchestrator.regenerate_scene(state, request.scene_number, request.note)
-    session_store.update(request.session_id, state)
+    session_id = session_store.update(request.session_id, state)
     return JSONResponse(
-        content={
-            "session_id": request.session_id,
-            "scenes": [s.model_dump() for s in state.scenes],
-        }
+        content={"session_id": session_id, "scenes": [s.model_dump() for s in state.scenes]}
     )
 
 
 @app.post("/api/generate-prompts")
-async def generate_prompts(request: PromptsRequest, username: str = Depends(generate_guard)):
+async def generate_prompts(request: PromptsRequest, caller: str = Depends(generate_guard)):
     state = session_store.get(request.session_id)
     _apply_scene_edits(state, request.scene_descriptions)
     state = await orchestrator.generate_prompts(state)
-    await _attach_reference_frames(state)
-    session_store.update(request.session_id, state)
-    return JSONResponse(
-        content={
-            "session_id": request.session_id,
-            "prompts": [p.model_dump() for p in state.prompts],
-        }
-    )
+
+    # The session is saved *before* the frames are attached: a base64 JPEG is
+    # hundreds of kilobytes, and with the stateless backend the state is carried
+    # by the client. Images belong in the response, not in the session.
+    session_id = session_store.update(request.session_id, state)
+
+    payload = [p.model_dump() for p in state.prompts]
+    frames = await _render_reference_frames(state)
+    for prompt in payload:
+        frame = frames.get(prompt["scene_number"])
+        if frame:
+            prompt.update(frame)
+
+    return JSONResponse(content={"session_id": session_id, "prompts": payload})
 
 
 @app.post("/api/format-edit-prompt", response_model=VideoEditOutput)
-async def format_edit_prompt(request: VideoEditInput, username: str = Depends(generate_guard)):
+async def format_edit_prompt(request: VideoEditInput, caller: str = Depends(generate_guard)):
     agent = config.agents.vfx_supervisor
     provider = get_llm_provider(config.provider)
     user = (
@@ -426,14 +367,17 @@ def _apply_scene_edits(state: PipelineState, edits: Optional[Dict[int, str]]) ->
         state.note(f"user edited scene {scene.scene_number}")
 
 
-async def _attach_reference_frames(state: PipelineState) -> None:
+async def _render_reference_frames(state: PipelineState) -> Dict[int, dict]:
     """Render still frames for the image-to-video scenes.
 
-    Storage mode comes from `images.storage`: `static` writes a JPEG and returns
-    a URL (fine on a normal host, lossy on an ephemeral filesystem), `base64`
-    returns the bytes inline and never touches the disk.
+    Returns `{scene_number: {"image_url": ...}}` or `{"image_base64": ...}`,
+    to be merged into the response. Storage mode comes from `images.storage`:
+    `static` writes a JPEG and returns a URL, `base64` returns the bytes inline
+    and never touches the disk - the only option on a read-only serverless
+    filesystem.
     """
     provider = get_llm_provider(config.provider)
+    frames: Dict[int, dict] = {}
     for prompt in state.prompts:
         if prompt.generation_type != "image-to-video" or not prompt.image_prompt:
             continue
@@ -441,15 +385,20 @@ async def _attach_reference_frames(state: PipelineState) -> None:
         if not image_bytes:
             continue
         if config.images.storage == "base64":
-            prompt.image_base64 = base64.b64encode(image_bytes).decode("ascii")
+            frames[prompt.scene_number] = {
+                "image_base64": base64.b64encode(image_bytes).decode("ascii")
+            }
             continue
         filename = f"scene_{prompt.scene_number}_{secrets.token_hex(4)}.jpg"
         try:
             config.images_dir.mkdir(parents=True, exist_ok=True)
             (config.images_dir / filename).write_bytes(image_bytes)
-            prompt.image_url = f"/{config.images.directory}/{filename}"
+            frames[prompt.scene_number] = {
+                "image_url": f"/{config.images.directory}/{filename}"
+            }
         except OSError as exc:
             logger.error("image.save_failed scene=%d error=%s", prompt.scene_number, exc)
+    return frames
 
 
 if __name__ == "__main__":

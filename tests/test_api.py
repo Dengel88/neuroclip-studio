@@ -1,8 +1,9 @@
-"""HTTP contract: the shape `index.html` actually posts, auth, and limits.
+"""HTTP contract: the shape `index.html` actually posts, limits, and sessions.
 
 Round two of the review found the funnel returning 422 on step two because the
 frontend posted a body while the endpoint declared query parameters. These tests
-pin the contract the browser relies on.
+pin the contract the browser relies on, against both session backends - the
+in-memory one used behind uvicorn and the stateless one required on serverless.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ import main
 from config import config
 from llm.mock import MockProvider
 
-AUTH = ("test-user", "test-password")
 BRIEF = {
     "video_format": "16:9",
     "total_duration": 30,
@@ -27,126 +27,130 @@ BRIEF = {
 }
 
 
-@pytest.fixture
-def client(monkeypatch):
-    """A client wired to the offline provider, with rate limiting out of the way."""
+@pytest.fixture(params=["memory", "stateless"])
+def client(request, monkeypatch):
+    """A client wired to the offline provider, once per session backend."""
+    from sessions import MemorySessionStore, StatelessSessionStore
+
     provider = MockProvider()
     monkeypatch.setattr(main.orchestrator, "_provider", provider)
     monkeypatch.setattr(main, "get_llm_provider", lambda *a, **k: provider)
     monkeypatch.setattr(config.rate_limit, "enabled", False)
+
+    if request.param == "memory":
+        store = MemorySessionStore(config.sessions.ttl_seconds, config.sessions.max_sessions)
+    else:
+        store = StatelessSessionStore("unit-test-secret", config.sessions.ttl_seconds)
+    monkeypatch.setattr(main, "session_store", store)
     main.limiter.clear()
+
     with TestClient(main.app) as test_client:
         test_client.provider = provider
+        test_client.backend = request.param
         yield test_client
 
 
-def start_session(client) -> str:
-    response = client.post("/api/generate-concepts", json=BRIEF, auth=AUTH)
+def funnel(client, upto: str = "prompts") -> dict:
+    """Walk the funnel, carrying the session id forward like the browser does."""
+    response = client.post("/api/generate-concepts", json=BRIEF)
     assert response.status_code == 200, response.text
-    return response.json()["session_id"]
+    data = response.json()
+    session_id = data["session_id"]
+    if upto == "concepts":
+        return {"session_id": session_id, "concepts": data["concepts"]}
+
+    response = client.post(
+        "/api/generate-storyboard",
+        json={"session_id": session_id, "concept_id": data["concepts"][0]["id"]},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    session_id = data["session_id"]
+    if upto == "storyboard":
+        return {"session_id": session_id, "scenes": data["scenes"]}
+
+    response = client.post("/api/generate-prompts", json={"session_id": session_id})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    return {"session_id": data["session_id"], "prompts": data["prompts"]}
 
 
-# -- auth ----------------------------------------------------------------
+# -- open access ---------------------------------------------------------
 
 
-def test_root_requires_auth(client):
-    assert client.get("/").status_code == 401
-
-
-def test_wrong_password_is_rejected(client):
-    assert client.get("/", auth=("test-user", "nope")).status_code == 401
-
-
-def test_correct_credentials_serve_the_app(client):
-    response = client.get("/", auth=AUTH)
+def test_root_needs_no_credentials(client):
+    """The demo is deliberately open - no login wall."""
+    response = client.get("/")
     assert response.status_code == 200
     assert "Neuroclip Studio" in response.text
 
 
-def test_health_is_open(client):
-    assert client.get("/api/health").json()["status"] == "ok"
+def test_health_reports_the_active_backends(client):
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+    assert body["sessions_backend"] in ("memory", "stateless")
+
+
+def test_config_endpoint_matches_the_yaml(client):
+    body = client.get("/api/config").json()
+    assert body["allowed_scene_durations"] == config.domain.allowed_scene_durations
+    assert body["supported_aspect_ratios"] == config.domain.supported_aspect_ratios
 
 
 # -- the funnel ----------------------------------------------------------
 
 
 def test_full_funnel_over_http(client):
-    session_id = start_session(client)
+    storyboard = funnel(client, upto="storyboard")
+    assert sum(s["duration"] for s in storyboard["scenes"]) == BRIEF["total_duration"]
 
-    concepts = client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).json()["concepts"]
-
-    storyboard = client.post(
-        "/api/generate-storyboard",
-        json={"session_id": session_id, "concept_id": concepts[0]["id"]},
-        auth=AUTH,
-    )
-    assert storyboard.status_code == 200, storyboard.text
-    scenes = storyboard.json()["scenes"]
-    assert sum(s["duration"] for s in scenes) == BRIEF["total_duration"]
-
-    prompts = client.post(
-        "/api/generate-prompts", json={"session_id": session_id}, auth=AUTH
-    )
-    assert prompts.status_code == 200, prompts.text
-    payload = prompts.json()["prompts"]
-    assert len(payload) == len(scenes)
+    result = funnel(client)
+    assert result["prompts"]
     for dimension in config.domain.veo_prompt_dimensions:
-        assert dimension in payload[0]["technical_prompt"]
+        assert dimension in result["prompts"][0]["technical_prompt"]
+
+
+def test_every_response_carries_a_usable_session_id(client):
+    """The stateless backend mints a new token per step; the browser must adopt it."""
+    result = funnel(client, upto="storyboard")
+    follow_up = client.post("/api/generate-prompts", json={"session_id": result["session_id"]})
+    assert follow_up.status_code == 200, follow_up.text
 
 
 def test_scene_edits_reach_the_server_state(client):
-    session_id = start_session(client)
-    concepts = client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).json()["concepts"]
-    client.post(
-        "/api/generate-storyboard",
-        json={"session_id": session_id, "concept_id": concepts[0]["id"]},
-        auth=AUTH,
-    )
-
+    storyboard = funnel(client, upto="storyboard")
     response = client.post(
         "/api/generate-prompts",
-        json={"session_id": session_id, "scene_descriptions": {"1": "A hand-written shot"}},
-        auth=AUTH,
+        json={
+            "session_id": storyboard["session_id"],
+            "scene_descriptions": {"1": "A hand-written shot"},
+        },
     )
     assert response.status_code == 200, response.text
-    state = main.session_store.get(session_id)
+
+    state = main.session_store.get(response.json()["session_id"])
     assert state.scenes[0].visual_description == "A hand-written shot"
 
 
 def test_editing_an_unknown_scene_is_a_400(client):
-    session_id = start_session(client)
-    concepts = client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).json()["concepts"]
-    client.post(
-        "/api/generate-storyboard",
-        json={"session_id": session_id, "concept_id": concepts[0]["id"]},
-        auth=AUTH,
-    )
+    storyboard = funnel(client, upto="storyboard")
     response = client.post(
         "/api/generate-prompts",
-        json={"session_id": session_id, "scene_descriptions": {"99": "nope"}},
-        auth=AUTH,
+        json={"session_id": storyboard["session_id"], "scene_descriptions": {"99": "nope"}},
     )
     assert response.status_code == 400
     assert "99" in response.json()["detail"]
 
 
 def test_retake_endpoint(client):
-    session_id = start_session(client)
-    concepts = client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).json()["concepts"]
-    before = client.post(
-        "/api/generate-storyboard",
-        json={"session_id": session_id, "concept_id": concepts[0]["id"]},
-        auth=AUTH,
-    ).json()["scenes"]
-
+    storyboard = funnel(client, upto="storyboard")
     response = client.post(
         "/api/regenerate-scene",
-        json={"session_id": session_id, "scene_number": 2, "note": "wider shot"},
-        auth=AUTH,
+        json={"session_id": storyboard["session_id"], "scene_number": 2, "note": "wider shot"},
     )
     assert response.status_code == 200, response.text
     after = response.json()["scenes"]
-    assert len(after) == len(before)
+    assert len(after) == len(storyboard["scenes"])
     assert sum(s["duration"] for s in after) == BRIEF["total_duration"]
 
 
@@ -154,16 +158,12 @@ def test_retake_endpoint(client):
 
 
 def test_unknown_session_is_404(client):
-    response = client.post(
-        "/api/generate-prompts", json={"session_id": "does-not-exist"}, auth=AUTH
-    )
+    response = client.post("/api/generate-prompts", json={"session_id": "does-not-exist"})
     assert response.status_code == 404
 
 
 def test_impossible_duration_is_400_not_500(client):
-    response = client.post(
-        "/api/generate-concepts", json={**BRIEF, "total_duration": 15}, auth=AUTH
-    )
+    response = client.post("/api/generate-concepts", json={**BRIEF, "total_duration": 15})
     assert response.status_code == 400
     assert "cannot be composed" in response.json()["detail"]
 
@@ -172,25 +172,17 @@ def test_oversized_input_is_rejected(client):
     response = client.post(
         "/api/generate-concepts",
         json={**BRIEF, "topic_idea": "x" * (config.limits.max_long_text_chars + 1)},
-        auth=AUTH,
     )
     assert response.status_code == 422
 
 
 def test_empty_field_is_rejected(client):
-    response = client.post(
-        "/api/generate-concepts", json={**BRIEF, "business_goal": ""}, auth=AUTH
-    )
+    response = client.post("/api/generate-concepts", json={**BRIEF, "business_goal": ""})
     assert response.status_code == 422
 
 
-def test_config_endpoint_matches_the_yaml(client):
-    body = client.get("/api/config", auth=AUTH).json()
-    assert body["allowed_scene_durations"] == config.domain.allowed_scene_durations
-    assert body["supported_aspect_ratios"] == config.domain.supported_aspect_ratios
-
-
 # -- rate limiting -------------------------------------------------------
+# With no login, this is the only thing between a stranger and the API budget.
 
 
 def test_generation_endpoints_are_rate_limited(client, monkeypatch):
@@ -198,87 +190,61 @@ def test_generation_endpoints_are_rate_limited(client, monkeypatch):
     monkeypatch.setattr(config.rate_limit, "generation_requests_per_minute", 2)
     main.limiter.clear()
 
-    codes = [
-        client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).status_code
-        for _ in range(3)
-    ]
-    assert codes[:2] == [200, 200]
-    assert codes[2] == 429
+    codes = [client.post("/api/generate-concepts", json=BRIEF).status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+    main.limiter.clear()
+
+
+def test_rate_limit_is_keyed_by_forwarded_client_ip(client, monkeypatch):
+    """Behind a proxy the socket address is the proxy - everyone would share a bucket."""
+    monkeypatch.setattr(config.rate_limit, "enabled", True)
+    monkeypatch.setattr(config.rate_limit, "generation_requests_per_minute", 1)
+    main.limiter.clear()
+
+    first = client.post(
+        "/api/generate-concepts", json=BRIEF, headers={"X-Forwarded-For": "203.0.113.1"}
+    )
+    same_caller = client.post(
+        "/api/generate-concepts", json=BRIEF, headers={"X-Forwarded-For": "203.0.113.1"}
+    )
+    other_caller = client.post(
+        "/api/generate-concepts", json=BRIEF, headers={"X-Forwarded-For": "203.0.113.9"}
+    )
+
+    assert first.status_code == 200
+    assert same_caller.status_code == 429
+    assert other_caller.status_code == 200
     main.limiter.clear()
 
 
 def test_rate_limit_can_be_switched_off(client, monkeypatch):
     monkeypatch.setattr(config.rate_limit, "enabled", False)
     main.limiter.clear()
-    codes = [
-        client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).status_code
-        for _ in range(4)
-    ]
+    codes = [client.post("/api/generate-concepts", json=BRIEF).status_code for _ in range(4)]
     assert set(codes) == {200}
-
-
-# -- sessions ------------------------------------------------------------
-
-
-def test_session_capacity_is_bounded(monkeypatch):
-    store = main.SessionStore(ttl_seconds=3600, max_sessions=2)
-    from pipeline import PipelineState
-
-    ids = [store.create(PipelineState(**BRIEF)) for _ in range(3)]
-    assert len(store) == 2
-    with pytest.raises(Exception):
-        store.get(ids[0])
-
-
-def test_expired_session_is_gone():
-    from fastapi import HTTPException
-
-    from pipeline import PipelineState
-
-    store = main.SessionStore(ttl_seconds=3600, max_sessions=10)
-    session_id = store.create(PipelineState(**BRIEF))
-    # Age the session past its TTL instead of moving the process clock.
-    store._sessions[session_id]["expires"] -= 7200
-
-    with pytest.raises(HTTPException) as exc:
-        store.get(session_id)
-    assert exc.value.status_code == 404
-    assert len(store) == 0
-
-
-def test_sweep_drops_expired_sessions_only():
-    from pipeline import PipelineState
-
-    store = main.SessionStore(ttl_seconds=3600, max_sessions=10)
-    alive = store.create(PipelineState(**BRIEF))
-    doomed = store.create(PipelineState(**BRIEF))
-    store._sessions[doomed]["expires"] -= 7200
-
-    assert store.sweep() == 1
-    assert len(store) == 1
-    assert store.get(alive) is not None
 
 
 # -- image storage modes -------------------------------------------------
 
 
-def test_base64_storage_never_touches_the_disk(client, monkeypatch, tmp_path):
+def test_base64_storage_never_touches_the_disk(client, monkeypatch):
     monkeypatch.setattr(config.images, "storage", "base64")
-    session_id = start_session(client)
-    concepts = client.post("/api/generate-concepts", json=BRIEF, auth=AUTH).json()["concepts"]
-    client.post(
-        "/api/generate-storyboard",
-        json={"session_id": session_id, "concept_id": concepts[0]["id"]},
-        auth=AUTH,
-    )
-    prompts = client.post(
-        "/api/generate-prompts", json={"session_id": session_id}, auth=AUTH
-    ).json()["prompts"]
+    result = funnel(client)
 
-    inline = [p for p in prompts if p["generation_type"] == "image-to-video"]
+    inline = [p for p in result["prompts"] if p["generation_type"] == "image-to-video"]
     assert inline, "the mock router should produce at least one image-to-video scene"
-    assert all(p["image_url"] is None for p in inline)
+    assert all(p.get("image_url") is None for p in inline)
     assert all(base64.b64decode(p["image_base64"]) for p in inline)
+
+
+def test_images_are_not_stored_in_the_session(client, monkeypatch):
+    """A base64 JPEG inside a stateless token would blow past the size limit."""
+    monkeypatch.setattr(config.images, "storage", "base64")
+    result = funnel(client)
+
+    state = main.session_store.get(result["session_id"])
+    assert all(p.image_base64 is None for p in state.prompts)
+    assert all(p.image_url is None for p in state.prompts)
 
 
 def test_image_cleanup_removes_only_old_files(monkeypatch, tmp_path):

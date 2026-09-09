@@ -80,9 +80,16 @@ class LimitsConfig(BaseModel):
 
 
 class SessionsConfig(BaseModel):
+    backend: str = Field(default="memory")
     ttl_seconds: int = Field(..., ge=1)
     max_sessions: int = Field(..., ge=1)
     sweep_interval_seconds: int = Field(..., ge=1)
+
+    @model_validator(mode="after")
+    def _check_backend(self) -> "SessionsConfig":
+        if self.backend not in ("memory", "stateless"):
+            raise ValueError("sessions.backend must be either 'memory' or 'stateless'")
+        return self
 
 
 class RateLimitConfig(BaseModel):
@@ -163,11 +170,30 @@ def load_config(path: str | os.PathLike | None = None) -> AppConfig:
     with open(resolved, "r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
 
-    provider_override = os.getenv("LLM_PROVIDER")
-    if provider_override:
-        data["provider"] = provider_override
-
+    _apply_env_overrides(data)
     return AppConfig(**data)
+
+
+def _apply_env_overrides(data: dict) -> None:
+    """Let the deployment environment override a few file settings.
+
+    Serverless hosts get sane defaults automatically: their filesystem is
+    read-only and their processes are short-lived, so writing JPEGs to disk and
+    keeping sessions in a dict both quietly break. Vercel sets `VERCEL` itself.
+    """
+    on_serverless = bool(os.getenv("VERCEL"))
+
+    provider = os.getenv("LLM_PROVIDER")
+    if provider:
+        data["provider"] = provider
+
+    storage = os.getenv("IMAGES_STORAGE") or ("base64" if on_serverless else None)
+    if storage:
+        data.setdefault("images", {})["storage"] = storage
+
+    backend = os.getenv("SESSIONS_BACKEND") or ("stateless" if on_serverless else None)
+    if backend:
+        data.setdefault("sessions", {})["backend"] = backend
 
 
 config = load_config()

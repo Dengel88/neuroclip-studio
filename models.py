@@ -17,6 +17,10 @@ from config import config
 
 SHORT = config.limits.max_short_text_chars
 LONG = config.limits.max_long_text_chars
+# A session id is either a UUID (memory backend) or a signed state token
+# (stateless backend, used on serverless). The cap bounds the second case;
+# sessions.py enforces the same number when reading a token.
+MAX_SESSION_ID_CHARS = 128 * 1024
 _ALLOWED_DURATIONS = ", ".join(str(d) for d in config.domain.allowed_scene_durations)
 _RATIOS = ", ".join(config.domain.supported_aspect_ratios)
 
@@ -135,12 +139,12 @@ class VideoEditOutput(BaseModel):
 
 
 class StoryboardRequest(BaseModel):
-    session_id: str = Field(..., min_length=1, max_length=64)
+    session_id: str = Field(..., min_length=1, max_length=MAX_SESSION_ID_CHARS)
     concept_id: int = Field(..., ge=0)
 
 
 class PromptsRequest(BaseModel):
-    session_id: str = Field(..., min_length=1, max_length=64)
+    session_id: str = Field(..., min_length=1, max_length=MAX_SESSION_ID_CHARS)
     # The browser lets the user tweak the shot descriptions before the prompt
     # stage. Those edits are merged into the server-side state, keyed by scene
     # number, so the state stays authoritative.
@@ -148,7 +152,7 @@ class PromptsRequest(BaseModel):
 
 
 class RegenerateSceneRequest(BaseModel):
-    session_id: str = Field(..., min_length=1, max_length=64)
+    session_id: str = Field(..., min_length=1, max_length=MAX_SESSION_ID_CHARS)
     scene_number: int = Field(..., ge=1)
     note: str | None = Field(
         default=None,

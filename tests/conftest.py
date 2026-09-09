@@ -16,9 +16,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-# Set before `main` is imported: the app refuses to start without credentials.
-os.environ.setdefault("BASIC_AUTH_USER", "test-user")
-os.environ.setdefault("BASIC_AUTH_PASSWORD", "test-password")
+# Set before `main` is imported: the stateless session backend needs a signing
+# secret, and the tests exercise both backends.
+os.environ.setdefault("SESSION_SECRET", "test-secret-not-used-anywhere-real")
 
 from config import load_config  # noqa: E402
 from llm.mock import MockProvider  # noqa: E402

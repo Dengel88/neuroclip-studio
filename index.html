@@ -94,6 +94,9 @@
             if (!res.ok) {
                 throw new Error(formatDetail(data.detail) || `Server error (HTTP ${res.status})`);
             }
+            // With the stateless session backend the token *is* the state, so
+            // every response mints a fresh one. Always adopt the latest.
+            if (data.session_id) sessionId = data.session_id;
             return data;
         }
 
@@ -146,7 +149,6 @@
             try {
                 const data = await postJson('/api/generate-concepts', payload);
 
-                sessionId = data.session_id;
                 currentConcepts = data.concepts;
                 container.innerHTML = "";
                 currentConcepts.forEach((c, index) => {

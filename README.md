@@ -42,7 +42,8 @@ not a generic error.
 ```
 index.html            single-page UI; holds a session id, nothing else
   |
-main.py               auth, rate limiting, sessions, HTTP <-> domain error mapping
+main.py               rate limiting, HTTP <-> domain error mapping
+sessions.py           memory | stateless (signed token) session backends
   |
 pipeline.py           PipelineState + stages + repair loop + regenerate_scene
   |
@@ -54,11 +55,15 @@ config.yaml           models, temperatures, retries, domain constants
 prompts/*.md          system instructions with $placeholders filled from config
 ```
 
-**State is server-side.** `PipelineState` holds the brief, the concepts, the
-chosen one, the storyboard, the prompts and an audit trail. That is what makes
+**State is explicit and owned by the backend.** `PipelineState` holds the brief,
+the concepts, the chosen one, the storyboard, the prompts and an audit trail —
+the browser holds a handle to it and nothing else. That is what makes
 `regenerate_scene(state, n)` possible: one shot is re-generated, its duration is
 held fixed so the total stays valid, the stale prompt for that scene is dropped,
 and every other scene is untouched. There is a test that asserts exactly that.
+
+Where that state is *stored* is a deployment detail, not an architectural one —
+see [Deploying](#deploying).
 
 **Transport failures and validation failures are different things.**
 `GeminiProvider` retries and rotates keys on 429/503/timeouts with exponential
@@ -73,20 +78,52 @@ Error classification is explicit: `429/503/…` → retry, `401/403` → next ke
 ## Setup
 
 ```bash
-cp .env.example .env       # fill in BASIC_AUTH_* and at least GEMINI_API_KEY_1
+cp .env.example .env       # fill in GEMINI_API_KEY_1
 python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate
 pip install -r requirements.txt
 python main.py
 ```
 
-The app **refuses to start** without `BASIC_AUTH_USER` and `BASIC_AUTH_PASSWORD`.
-There are no default credentials. See [`.env.example`](.env.example).
+Secrets live in `.env`, which is gitignored. `.env.example` is the committed
+template and holds no values.
 
 Run it offline, with no API key at all:
 
 ```bash
 LLM_PROVIDER=mock python main.py
 ```
+
+### Deploying
+
+The demo is **open** - no login. That is a deliberate choice for a portfolio
+piece, and it makes the rate limiter the only thing between a stranger with the
+URL and the API budget, so it is on by default and keyed by client IP (first hop
+of `X-Forwarded-For` behind a proxy). To put a wall back up, front it with your
+host's access control rather than re-adding Basic Auth to the app.
+
+Two settings decide whether a deployment works at all, and both auto-adjust when
+`VERCEL` is set:
+
+| | Long-lived process (uvicorn, Render, Docker) | Serverless (Vercel) |
+|---|---|---|
+| `sessions.backend` | `memory` | `stateless` |
+| `images.storage` | `static` | `base64` |
+
+On serverless, consecutive requests may land on different instances, so a
+server-side session dict loses the pipeline between step one and step two of the
+funnel. The `stateless` backend puts the state in a signed, compressed token that
+the browser carries - HMAC-SHA256, with an expiry, verified before anything is
+decompressed. A realistic 120-second project serialises to roughly 1 KB.
+
+For Vercel, set two environment variables in the project settings:
+
+```
+GEMINI_API_KEY_1   your Google AI Studio key
+SESSION_SECRET     python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Everything else is inferred. `vercel.json` bundles `config.yaml`, `index.html`
+and `prompts/` into the function.
 
 ## Swapping the model
 
@@ -115,11 +152,12 @@ To add a provider: implement `llm/base.py::LLMProvider`, add one line to
 pytest
 ```
 
-100 tests, no network. Coverage is aimed at the things that broke before:
+135 tests, no network. Coverage is aimed at the things that broke before:
 placeholder substitution, the duration validator, key rotation against faked
 429/503/404/400 responses, the transport-vs-validation split, repair-loop
-recovery and exhaustion, targeted retakes, session expiry and eviction, rate
-limiting, and the HTTP contract the frontend depends on.
+recovery and exhaustion, targeted retakes, session expiry, eviction, token
+forgery and tampering, rate limiting, and the HTTP contract the frontend
+depends on - the API tests run against both session backends.
 
 ## Evals
 
@@ -158,8 +196,12 @@ they verify the pipeline's own guarantees, not Gemini's creative quality.
 
 ## Security notes
 
-- No credentials in code or in this README; the app refuses to start without them.
-- `secrets.compare_digest` for the auth comparison.
+- No credentials in the code, the README or the repository history.
+- The demo is intentionally unauthenticated; the rate limiter is what guards the
+  API budget, and it is keyed by forwarded client IP.
+- Session state travelling through the client is signed with HMAC-SHA256 and
+  verified in constant time *before* decompression, so a token cannot be forged
+  into a five-hundred-scene request. Malformed tokens are 404, never 500.
 - Input length and range limits come from `config.yaml` (`limits.*`, `domain.*`)
   and are enforced by the request models, so the advertised bound is the enforced
   bound (`tests/test_api.py::test_oversized_input_is_rejected`).
@@ -174,10 +216,12 @@ they verify the pipeline's own guarantees, not Gemini's creative quality.
 
 These are real and deliberate, not oversights:
 
-- **In-memory sessions.** Restarting the process drops every in-flight pipeline,
-  and the store is per-worker. Production wants Redis.
-- **In-process rate limiting.** Same caveat: it protects one instance's key
-  budget, not a fleet.
+- **Sessions.** `memory` is per-worker and lost on restart; `stateless` avoids
+  both but caps the state at what fits in a request body. Neither is Redis.
+- **In-process rate limiting.** It protects one instance's key budget, not a
+  fleet - and on serverless each instance counts separately, so the effective
+  ceiling is higher than the configured number.
+- **No authentication.** Anyone with the URL can spend the API quota.
 - **Ephemeral image storage.** `images.storage: static` writes JPEGs to `static/`
   and cleans them up after `retention_seconds`. On a host with an ephemeral or
   read-only filesystem, switch to `images.storage: base64` — the bytes come back

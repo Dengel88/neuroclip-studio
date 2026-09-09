@@ -88,7 +88,13 @@ limits:
   max_scenes: 60
 
 sessions:
-  # In-memory pipeline session store. See README - production needs Redis.
+  # "memory"    - server-side dict. Needs a long-lived process (uvicorn, Render,
+  #               a container). Lost on restart, not shared between workers.
+  # "stateless" - the state travels with the client as a signed, compressed
+  #               token. Required on serverless hosts (Vercel), where two
+  #               requests may hit different instances.
+  # Overridden by SESSIONS_BACKEND; defaults to "stateless" when VERCEL is set.
+  backend: memory
   ttl_seconds: 3600
   max_sessions: 200
   sweep_interval_seconds: 300
@@ -103,6 +109,8 @@ rate_limit:
 images:
   # "static" writes JPEGs to `directory` and returns a URL;
   # "base64" returns the bytes inline and touches no filesystem.
+  # Overridden by IMAGES_STORAGE; defaults to "base64" when VERCEL is set,
+  # because a serverless filesystem is read-only.
   storage: static
   directory: static
   retention_seconds: 3600
