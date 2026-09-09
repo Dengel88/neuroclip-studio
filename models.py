@@ -9,7 +9,7 @@ Two families live here:
   advertised in the config are the bounds actually enforced.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -103,10 +103,10 @@ class OmniPrompt(BaseModel):
         ...,
         description=f"Must equal the scene duration. Strictly one of: {_ALLOWED_DURATIONS}.",
     )
-    image_url: str | None = Field(
+    image_url: Optional[str] = Field(
         default=None, description="Filled in by the backend, not by the model."
     )
-    image_base64: str | None = Field(
+    image_base64: Optional[str] = Field(
         default=None, description="Filled in by the backend when images.storage is 'base64'."
     )
 
@@ -148,13 +148,13 @@ class PromptsRequest(BaseModel):
     # The browser lets the user tweak the shot descriptions before the prompt
     # stage. Those edits are merged into the server-side state, keyed by scene
     # number, so the state stays authoritative.
-    scene_descriptions: Dict[int, str] | None = Field(default=None)
+    scene_descriptions: Optional[Dict[int, str]] = Field(default=None)
 
 
 class RegenerateSceneRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=MAX_SESSION_ID_CHARS)
     scene_number: int = Field(..., ge=1)
-    note: str | None = Field(
+    note: Optional[str] = Field(
         default=None,
         max_length=SHORT,
         description="Optional instruction for the retake, e.g. 'make it wider'.",

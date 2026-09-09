@@ -1,13 +1,9 @@
-# Pinned so a reviewer's checkout behaves like the one the evals were run on.
-# Runtime
+# Runtime only. Pinned so a reviewer's checkout behaves like the one the
+# evals were run on. Test tooling lives in requirements-dev.txt so it is
+# not shipped into the serverless bundle.
 fastapi==0.141.1
 uvicorn==0.52.4
 pydantic==2.13.5
 google-genai==2.22.0
 python-dotenv==1.2.3
 PyYAML==6.0.3
-
-# Tests (see pytest.ini); httpx backs fastapi.testclient.
-pytest==9.1.1
-pytest-asyncio==1.4.0
-httpx==0.28.1

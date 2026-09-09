@@ -200,12 +200,24 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Neuroclip Studio - AI Video Production Platform", lifespan=lifespan)
 
 if config.images.storage == "static":
-    config.images_dir.mkdir(parents=True, exist_ok=True)
-    app.mount(
-        f"/{config.images.directory}",
-        StaticFiles(directory=config.images_dir),
-        name="static",
-    )
+    # A read-only filesystem must degrade, not crash. The previous version
+    # called os.makedirs() unguarded at import time, which is exactly how a
+    # serverless deployment died with FUNCTION_INVOCATION_FAILED before the
+    # first request was ever served.
+    try:
+        config.images_dir.mkdir(parents=True, exist_ok=True)
+        app.mount(
+            f"/{config.images.directory}",
+            StaticFiles(directory=config.images_dir),
+            name="static",
+        )
+    except OSError as exc:
+        logger.error(
+            "images.static_unavailable error=%s - falling back to inline base64. "
+            "Set IMAGES_STORAGE=base64 to make this explicit.",
+            exc,
+        )
+        config.images.storage = "base64"
 
 
 # ===========================================================================

@@ -80,7 +80,7 @@ Error classification is explicit: `429/503/…` → retry, `401/403` → next ke
 ```bash
 cp .env.example .env       # fill in GEMINI_API_KEY_1
 python -m venv .venv && .venv/Scripts/activate   # or source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime deps + test tooling
 python main.py
 ```
 
@@ -123,7 +123,15 @@ SESSION_SECRET     python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 Everything else is inferred. `vercel.json` bundles `config.yaml`, `index.html`
-and `prompts/` into the function.
+and `prompts/` into the function, and `requirements.txt` carries runtime
+dependencies only - test tooling lives in `requirements-dev.txt` and is not
+shipped into the bundle.
+
+Nothing writes to disk at import time. The pre-refactor version called
+`os.makedirs("static")` while the module was loading, which on a read-only
+serverless filesystem killed the function before it served a single request
+(`FUNCTION_INVOCATION_FAILED`). Static storage now degrades to inline base64
+instead of raising.
 
 ## Swapping the model
 
