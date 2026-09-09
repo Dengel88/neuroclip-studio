@@ -1,69 +1,157 @@
+"""Pydantic contracts.
+
+Two families live here:
+
+* *agent schemas* (``ScriptwriterOutput``, ``StoryboarderOutput``, ...) - handed
+  to the LLM as ``response_schema`` and used to parse its answer;
+* *HTTP request schemas* - what ``index.html`` posts. Their length and range
+  limits come from ``config.yaml`` (``limits.*``, ``domain.*``), so the bounds
+  advertised in the config are the bounds actually enforced.
+"""
+
+from typing import Dict, List
+
 from pydantic import BaseModel, Field
-from typing import List
+
+from config import config
+
+SHORT = config.limits.max_short_text_chars
+LONG = config.limits.max_long_text_chars
+_ALLOWED_DURATIONS = ", ".join(str(d) for d in config.domain.allowed_scene_durations)
+_RATIOS = ", ".join(config.domain.supported_aspect_ratios)
 
 # ==========================================
-# AGENT 1: SCRIPTWRITER MODELS
+# AGENT 1: SCRIPTWRITER
 # ==========================================
+
+
 class ScriptwriterInput(BaseModel):
-    video_format: str = Field(..., description="e.g., '9:16', '16:9', '1:1'")
-    total_duration: int = Field(..., description="Total seconds, e.g., 30, 60")
-    business_goal: str = Field(..., description="e.g., 'Lead generation', 'Brand awareness', 'Viral'")
-    target_audience: str = Field(..., description="Description of the audience")
-    topic_idea: str = Field(..., description="Core topic or user's raw idea")
-    needs_voiceover: bool = Field(..., description="True if voiceover is needed, False otherwise")
+    """The brief. Posted by the browser to /api/generate-concepts."""
+
+    video_format: str = Field(..., description=f"One of: {_RATIOS}")
+    total_duration: int = Field(
+        ...,
+        ge=config.domain.min_total_duration,
+        le=config.domain.max_total_duration,
+        description="Total seconds, e.g. 30, 60",
+    )
+    business_goal: str = Field(..., min_length=1, max_length=SHORT)
+    target_audience: str = Field(..., min_length=1, max_length=SHORT)
+    topic_idea: str = Field(..., min_length=1, max_length=LONG)
+    needs_voiceover: bool = Field(default=False)
+
 
 class Concept(BaseModel):
-    id: int = Field(..., description="1, 2, or 3")
+    id: int = Field(..., description="Sequential id starting at 1")
     working_title: str = Field(..., description="Catchy, short title")
-    logline: str = Field(..., description="1-2 sentences explaining the core visual and narrative idea")
+    logline: str = Field(..., description="1-2 sentences on the core visual and narrative idea")
     visual_style: str = Field(..., description="Specific style description suitable for AI")
     pacing: str = Field(..., description="Speed of the video")
-    voiceover_tone: str = Field(..., description="Tone of the voiceover. Empty if needs_voiceover is False.")
+    voiceover_tone: str = Field(
+        ..., description="Tone of the voiceover. Empty string if no voiceover is required."
+    )
+
 
 class ScriptwriterOutput(BaseModel):
-    concepts: List[Concept] = Field(..., description="A list of exactly 3 video concepts.")
+    concepts: List[Concept] = Field(
+        ..., description=f"Exactly {config.domain.concepts_count} distinct video concepts."
+    )
+
 
 # ==========================================
-# AGENT 2: STORYBOARDER MODELS
+# AGENT 2: STORYBOARDER
 # ==========================================
-class StoryboarderInput(BaseModel):
-    working_title: str = Field(..., description="The title of the chosen concept")
-    logline: str = Field(..., description="The core idea of the concept")
-    visual_style: str = Field(..., description="The visual style")
-    pacing: str = Field(..., description="The pacing of the video")
-    total_duration: int = Field(..., description="Total duration of the video in seconds")
+
 
 class Scene(BaseModel):
-    scene_number: int = Field(..., description="Sequential number of the scene (1, 2, 3...)")
-    visual_description: str = Field(..., description="Highly detailed description of what happens visually.")
-    camera_movement: str = Field(..., description="e.g., 'Slow pan right', 'Static', 'Zoom in'")
-    duration: int = Field(..., description="Duration of this specific scene in seconds")
+    scene_number: int = Field(..., description="Sequential number of the scene (1, 2, 3, ...)")
+    visual_description: str = Field(..., description="Detailed description of the shot.")
+    camera_movement: str = Field(..., description="e.g. 'Slow pan right', 'Static', 'Zoom in'")
+    duration: int = Field(..., description=f"Seconds. Strictly one of: {_ALLOWED_DURATIONS}.")
+
 
 class StoryboarderOutput(BaseModel):
-    scenes: List[Scene] = Field(..., description="List of all scenes making up the video.")
+    scenes: List[Scene] = Field(..., description="All scenes making up the video, in order.")
+
 
 # ==========================================
-# AGENT 3: PROMPT ENGINEER MODELS
+# AGENT 3: PROMPT ENGINEER
 # ==========================================
-class PromptEngineerInput(BaseModel):
-    visual_style: str = Field(..., description="The overall visual style of the video")
-    scenes: List[Scene] = Field(..., description="The list of scenes generated by the Storyboarder")
+
 
 class OmniPrompt(BaseModel):
-    scene_number: int = Field(..., description="Matches the scene number")
-    generation_type: str = Field(..., description="Strictly 'text-to-video' or 'image-to-video'")
-    image_prompt: str = Field(..., description="If image-to-video, provide a highly detailed prompt for Gemini 3 Pro Image. Else empty.")
-    technical_prompt: str = Field(..., description="Highly technical prompt for Omni (6 dimensions).")
-    omni_duration: int = Field(..., description="Strictly 4, 6, 8, or 10.")
+    scene_number: int = Field(..., description="Matches the storyboard scene number")
+    generation_type: str = Field(
+        ..., description="Strictly 'text-to-video' or 'image-to-video'"
+    )
+    image_prompt: str = Field(
+        ...,
+        description="Detailed still-frame prompt when generation_type is "
+        "'image-to-video'. Empty string otherwise.",
+    )
+    technical_prompt: str = Field(
+        ...,
+        description="Video prompt containing all "
+        f"{len(config.domain.veo_prompt_dimensions)} labelled dimensions: "
+        f"{', '.join(config.domain.veo_prompt_dimensions)}.",
+    )
+    omni_duration: int = Field(
+        ...,
+        description=f"Must equal the scene duration. Strictly one of: {_ALLOWED_DURATIONS}.",
+    )
+    image_url: str | None = Field(
+        default=None, description="Filled in by the backend, not by the model."
+    )
+    image_base64: str | None = Field(
+        default=None, description="Filled in by the backend when images.storage is 'base64'."
+    )
+
 
 class PromptEngineerOutput(BaseModel):
-    prompts: List[OmniPrompt] = Field(..., description="List of technical prompts for Omni.")
-    # ==========================================
-# AGENT 4: VFX SUPERVISOR (VIDEO EDITOR)
+    prompts: List[OmniPrompt] = Field(..., description="One technical prompt per scene.")
+
+
 # ==========================================
+# AGENT 4: VFX SUPERVISOR
+# ==========================================
+
+
 class VideoEditInput(BaseModel):
-    original_prompt: str = Field(..., description="The original prompt used to generate the video")
-    user_request: str = Field(..., description="What the user wants to change (e.g., 'make it rain', 'change to cyberpunk')")
+    original_prompt: str = Field(..., min_length=1, max_length=LONG)
+    user_request: str = Field(..., min_length=1, max_length=LONG)
+
 
 class VideoEditOutput(BaseModel):
-    optimized_edit_prompt: str = Field(..., description="The highly structured edit prompt following the 5 rules")
+    optimized_edit_prompt: str = Field(
+        ..., description=f"The rewritten prompt obeying all {len(config.domain.edit_rules)} rules."
+    )
+
+
+# ==========================================
+# HTTP REQUESTS FOR THE LATER PIPELINE STAGES
+# ==========================================
+# session_id and concept_id travel in the body, not the query string, so the
+# browser can keep posting plain JSON for every step of the funnel.
+
+
+class StoryboardRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=64)
+    concept_id: int = Field(..., ge=0)
+
+
+class PromptsRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=64)
+    # The browser lets the user tweak the shot descriptions before the prompt
+    # stage. Those edits are merged into the server-side state, keyed by scene
+    # number, so the state stays authoritative.
+    scene_descriptions: Dict[int, str] | None = Field(default=None)
+
+
+class RegenerateSceneRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=64)
+    scene_number: int = Field(..., ge=1)
+    note: str | None = Field(
+        default=None,
+        max_length=SHORT,
+        description="Optional instruction for the retake, e.g. 'make it wider'.",
+    )
