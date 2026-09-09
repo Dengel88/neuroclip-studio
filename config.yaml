@@ -1,0 +1,109 @@
+# ===========================================================================
+# Neuroclip Studio - single source of truth for models, tuning and domain rules.
+#
+# Swapping the model for the entire pipeline is a one-line edit in
+# `models.chains.reasoning`. No Python file mentions a model name.
+# ===========================================================================
+
+# Which LLM backend to use: "gemini" (real API) or "mock" (offline, for tests
+# and evals). The LLM_PROVIDER environment variable overrides this value.
+provider: gemini
+
+models:
+  # Logical role -> ordered fallback chain. The first entry is the primary
+  # model; the provider walks down the chain when a model is unavailable.
+  chains:
+    reasoning:
+      - gemini-3.1-pro-preview
+      - gemini-3.5-flash
+    image:
+      - imagen-3.0-generate-001
+      - gemini-3-pro-image
+      - imagen-4.0-generate-001
+
+agents:
+  scriptwriter:
+    prompt_file: scriptwriter.md
+    model_alias: reasoning
+    temperature: 0.7
+  storyboarder:
+    prompt_file: storyboarder.md
+    model_alias: reasoning
+    temperature: 0.4
+  prompt_engineer:
+    prompt_file: prompt_engineer.md
+    model_alias: reasoning
+    temperature: 0.4
+  vfx_supervisor:
+    prompt_file: vfx_supervisor.md
+    model_alias: reasoning
+    temperature: 0.3
+
+retry:
+  # Attempts per API key before rotating to the next key.
+  attempts_per_key: 2
+  # Exponential backoff: delay = min(base * 2**attempt, max) * (1 +- jitter).
+  backoff_base_seconds: 0.5
+  backoff_max_seconds: 20.0
+  jitter_ratio: 0.25
+  # HTTP statuses treated as transient (retry / rotate); anything else is fatal
+  # for the current key and aborts its attempt loop immediately.
+  retry_on_status: [408, 429, 500, 502, 503, 504]
+
+repair:
+  # How many times a structurally invalid LLM answer is fed back to the model
+  # together with the validation error before the request is failed.
+  max_attempts: 2
+
+domain:
+  # Clip lengths the downstream video model can render. Injected into prompts
+  # AND enforced in code - the constant lives only here.
+  allowed_scene_durations: [4, 6, 8]
+  # How many concepts the scriptwriter must return.
+  concepts_count: 3
+  min_total_duration: 4
+  max_total_duration: 300
+  supported_aspect_ratios: ["16:9", "9:16", "1:1"]
+  # The six dimensions of the Veo prompt template. Drives both the rendered
+  # prompt template and the structural check on the generated prompt.
+  veo_prompt_dimensions:
+    - Camera
+    - Style
+    - Lighting
+    - Scene
+    - Action & Audio
+    - Text
+  # The five editing rules handed to the VFX supervisor.
+  edit_rules:
+    - "Anchor Rule: name the object that must stay untouched."
+    - "Before -> After: state the original state and the target state."
+    - "Layering: apply one visual change per sentence."
+    - "Time-tagging: bind each change to a timestamp inside the clip."
+    - "Audio sync: describe how the sound reacts to the visual change."
+
+limits:
+  # Upper bounds on user-supplied text, enforced by the Pydantic request models.
+  max_short_text_chars: 200
+  max_long_text_chars: 2000
+  max_scenes: 60
+
+sessions:
+  # In-memory pipeline session store. See README - production needs Redis.
+  ttl_seconds: 3600
+  max_sessions: 200
+  sweep_interval_seconds: 300
+
+rate_limit:
+  enabled: true
+  # Fixed-window limiter, per authenticated user + client IP.
+  requests_per_minute: 20
+  # Generation endpoints are expensive; they get their own tighter window.
+  generation_requests_per_minute: 8
+
+images:
+  # "static" writes JPEGs to `directory` and returns a URL;
+  # "base64" returns the bytes inline and touches no filesystem.
+  storage: static
+  directory: static
+  retention_seconds: 3600
+  cleanup_interval_seconds: 600
