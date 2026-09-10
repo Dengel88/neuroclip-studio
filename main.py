@@ -295,6 +295,9 @@ async def _provider_failed(request: Request, exc: ProviderError):
             " config.yaml is not available to this key."
             " Run `python check_provider.py` to see what the key can use."
         )
+    reason = getattr(exc, "upstream_reason", "")
+    if reason:
+        detail += f' Upstream said: "{reason}"'
     return JSONResponse(status_code=502, content={"detail": detail})
 
 

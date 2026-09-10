@@ -329,3 +329,34 @@ async def test_fatal_error_also_reports_the_status(fast_retries, no_real_client)
         await provider._execute_with_rotation(["model-a"], attempt)
 
     assert exc.value.trail == ["model-a:400"]
+
+
+def test_safe_reason_redacts_anything_key_shaped():
+    """An upstream error can quote the request back; a key must not survive it."""
+    from llm.gemini import safe_reason
+
+    leaked = Exception(
+        "400 INVALID_ARGUMENT: API key not valid: AIzaSyD-EXAMPLEKEY_1234567890abc"
+    )
+    reason = safe_reason(leaked)
+    assert "AIzaSy" not in reason
+    assert "[REDACTED_KEY]" in reason
+    assert "API key not valid" in reason
+
+
+def test_safe_reason_is_capped():
+    from llm.gemini import safe_reason
+
+    assert len(safe_reason(Exception("x" * 5000))) <= 223
+
+
+async def test_fatal_error_carries_the_upstream_reason(fast_retries, no_real_client):
+    provider = GeminiProvider(api_keys=["k1"])
+
+    def attempt(client, model_name):
+        raise FakeAPIError(400, "API key not valid. Please pass a valid API key.")
+
+    with pytest.raises(ProviderError) as exc:
+        await provider._execute_with_rotation(["model-a"], attempt)
+
+    assert "API key not valid" in exc.value.upstream_reason

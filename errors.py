@@ -21,9 +21,12 @@ class ProviderError(NeuroclipError):
 
     `trail` holds one `model:status` marker per distinct failure - the shortest
     thing that answers "was the key rejected, or does that model not exist?".
+    `upstream_reason` carries the provider's own explanation, redacted, for the
+    non-retryable case where that explanation is the whole answer.
     """
 
     trail: list[str] = []
+    upstream_reason: str = ""
 
 
 class ProviderExhaustedError(ProviderError):

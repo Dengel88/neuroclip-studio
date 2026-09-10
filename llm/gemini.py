@@ -58,6 +58,23 @@ def _status_of(error: BaseException) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+# Anything shaped like a Google API key, so a redacted reason can never carry
+# one even if the upstream error quotes the request back at us.
+_KEY_SHAPED = re.compile(r"AIza[0-9A-Za-z_\-]{10,}")
+
+
+def safe_reason(error: BaseException, limit: int = 220) -> str:
+    """The provider's own explanation, made safe to show.
+
+    For a non-retryable failure the upstream message *is* the diagnosis -
+    "API key not valid" is worth a hundred lines of guesswork. It is still
+    someone else's error text, so keys are redacted and the whole thing capped.
+    """
+    text = " ".join(str(error).split())
+    text = _KEY_SHAPED.sub("[REDACTED_KEY]", text)
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
 def classify(error: BaseException, retry_on_status: List[int]) -> Failure:
     status = _status_of(error)
     if status is not None:
@@ -152,6 +169,7 @@ class GeminiProvider(LLMProvider):
                                 f"Non-retryable error from {model_name}: {exc}"
                             )
                             fatal.trail = trail
+                            fatal.upstream_reason = safe_reason(exc)
                             raise fatal from exc
                         if verdict is Failure.MODEL_FATAL:
                             model_is_dead = True  # no key will resurrect it

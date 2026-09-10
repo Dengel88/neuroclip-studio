@@ -203,7 +203,7 @@ To add a provider: implement `llm/base.py::LLMProvider`, add one line to
 pytest
 ```
 
-148 tests, no network. Coverage is aimed at the things that broke before:
+151 tests, no network. Coverage is aimed at the things that broke before:
 placeholder substitution, the duration validator, key rotation against faked
 429/503/404/400 responses, the transport-vs-validation split, repair-loop
 recovery and exhaustion, targeted retakes, session expiry, eviction, token
