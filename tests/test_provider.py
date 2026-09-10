@@ -316,3 +316,16 @@ async def test_missing_image_degrades_to_none(fast_retries, monkeypatch):
     monkeypatch.setattr(provider, "_execute_with_rotation", refuse)
 
     assert await provider.generate_image("a red apple", "16:9") is None
+
+
+async def test_fatal_error_also_reports_the_status(fast_retries, no_real_client):
+    """An invalid key (400) must not read as 'the upstream API is unavailable'."""
+    provider = GeminiProvider(api_keys=["k1"])
+
+    def attempt(client, model_name):
+        raise FakeAPIError(400, "API key not valid")
+
+    with pytest.raises(ProviderError) as exc:
+        await provider._execute_with_rotation(["model-a"], attempt)
+
+    assert exc.value.trail == ["model-a:400"]

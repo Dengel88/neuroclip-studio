@@ -128,6 +128,12 @@ the repository into the function (`includeFiles`), because `config.yaml`,
 `prompts/*.md` and `index.html` are read at runtime and import tracing alone
 would not carry them.
 
+Two platform quirks are worked around rather than fought. The Python bridge
+cannot parse a request body containing raw non-ASCII bytes - it answers
+`There was an error parsing the body`, which makes a brief written in any
+non-Latin script unusable - so the frontend escapes those characters as JSON
+`\uXXXX` before sending; the payload is identical, the wire is pure ASCII.
+
 The routing form matters. A `rewrites` rule pointing at a fixed destination
 replaces the request path before the app sees it, so every route collapses onto
 one and even `/openapi.json` returns 404. `routes` with `dest` passes the
@@ -197,7 +203,7 @@ To add a provider: implement `llm/base.py::LLMProvider`, add one line to
 pytest
 ```
 
-147 tests, no network. Coverage is aimed at the things that broke before:
+148 tests, no network. Coverage is aimed at the things that broke before:
 placeholder substitution, the duration validator, key rotation against faked
 429/503/404/400 responses, the transport-vs-validation split, repair-loop
 recovery and exhaustion, targeted retakes, session expiry, eviction, token

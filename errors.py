@@ -17,7 +17,13 @@ class NeuroclipError(Exception):
 
 
 class ProviderError(NeuroclipError):
-    """Transport / API failure. Never shown to the model, only logged."""
+    """Transport / API failure. Never shown to the model, only logged.
+
+    `trail` holds one `model:status` marker per distinct failure - the shortest
+    thing that answers "was the key rejected, or does that model not exist?".
+    """
+
+    trail: list[str] = []
 
 
 class ProviderExhaustedError(ProviderError):

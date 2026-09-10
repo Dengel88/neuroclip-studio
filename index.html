@@ -84,11 +84,23 @@
         let chosenConcept = null;
         let currentScenes = [];
 
+        // Vercel's Python bridge cannot parse a request body containing raw
+        // non-ASCII bytes - it answers "There was an error parsing the body",
+        // which makes any brief written in Cyrillic, or carrying an emoji,
+        // unusable. JSON \uXXXX escapes are plain ASCII on the wire and decode
+        // to the exact same string, so the payload survives the trip unchanged.
+        function toAsciiJson(payload) {
+            return JSON.stringify(payload).replace(
+                /[\u0080-\uffff]/g,
+                ch => '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0')
+            );
+        }
+
         async function postJson(url, payload) {
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: toAsciiJson(payload)
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {

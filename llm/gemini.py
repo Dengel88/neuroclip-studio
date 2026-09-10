@@ -144,9 +144,15 @@ class GeminiProvider(LLMProvider):
                             verdict.value, type(exc).__name__,
                         )
                         if verdict is Failure.FATAL:
-                            raise ProviderError(
+                            # Carries the trail too. Without it, an invalid API
+                            # key (400) reached the user as "the upstream API is
+                            # unavailable" - a message pointing at the wrong
+                            # thing entirely.
+                            fatal = ProviderError(
                                 f"Non-retryable error from {model_name}: {exc}"
-                            ) from exc
+                            )
+                            fatal.trail = trail
+                            raise fatal from exc
                         if verdict is Failure.MODEL_FATAL:
                             model_is_dead = True  # no key will resurrect it
                             break

@@ -290,8 +290,9 @@ async def _provider_failed(request: Request, exc: ProviderError):
         # "those model names do not exist for this key", not "try again later".
         detail += (
             f" Tried: {', '.join(trail)}."
-            " A 404 means the model name in config.yaml is not available to this"
-            " API key; 401/403 means the key itself was rejected."
+            " A 400 almost always means the API key is invalid or truncated;"
+            " 401/403 means the key was rejected; 404 means the model name in"
+            " config.yaml is not available to this key."
             " Run `python check_provider.py` to see what the key can use."
         )
     return JSONResponse(status_code=502, content={"detail": detail})
