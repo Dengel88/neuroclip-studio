@@ -231,3 +231,32 @@ def test_unknown_provider_is_rejected():
     with pytest.raises(ValueError, match="Unknown LLM provider"):
         get_llm_provider("hal9000")
     reset_llm_providers()
+
+
+# -- diagnosis -----------------------------------------------------------
+
+
+async def test_exhaustion_reports_which_model_and_status(fast_retries, no_real_client):
+    """'Service unavailable' is not a diagnosis. Say what refused, and how."""
+    provider = GeminiProvider(api_keys=["k1"])
+
+    def attempt(client, model_name):
+        raise FakeAPIError(404 if model_name == "missing-model" else 403)
+
+    with pytest.raises(ProviderExhaustedError) as exc:
+        await provider._execute_with_rotation(["missing-model", "other-model"], attempt)
+
+    assert "missing-model:404" in exc.value.trail
+    assert "other-model:403" in exc.value.trail
+
+
+async def test_trail_does_not_repeat_identical_failures(fast_retries, no_real_client):
+    provider = GeminiProvider(api_keys=["k1", "k2", "k3"])
+
+    def attempt(client, model_name):
+        raise FakeAPIError(403)
+
+    with pytest.raises(ProviderExhaustedError) as exc:
+        await provider._execute_with_rotation(["one-model"], attempt)
+
+    assert exc.value.trail == ["one-model:403"]

@@ -21,7 +21,13 @@ class ProviderError(NeuroclipError):
 
 
 class ProviderExhaustedError(ProviderError):
-    """Every key and every model in the fallback chain has been tried."""
+    """Every key and every model in the fallback chain has been tried.
+
+    `trail` holds one `model:status` entry per distinct failure - the shortest
+    thing that answers "was the key rejected, or does that model not exist?".
+    """
+
+    trail: list[str] = []
 
 
 class DomainValidationError(NeuroclipError):

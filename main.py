@@ -283,10 +283,18 @@ async def _repair_exhausted(request: Request, exc: RepairExhaustedError):
 @app.exception_handler(ProviderError)
 async def _provider_failed(request: Request, exc: ProviderError):
     logger.error("provider.failed detail=%s", exc)
-    return JSONResponse(
-        status_code=502,
-        content={"detail": "The upstream model API is unavailable. Please retry shortly."},
-    )
+    trail = getattr(exc, "trail", None)
+    detail = "The upstream model API is unavailable. Please retry shortly."
+    if trail:
+        # e.g. "gemini-3.1-pro-preview:404, gemini-3.5-flash:404" - which says
+        # "those model names do not exist for this key", not "try again later".
+        detail += (
+            f" Tried: {', '.join(trail)}."
+            " A 404 means the model name in config.yaml is not available to this"
+            " API key; 401/403 means the key itself was rejected."
+            " Run `python check_provider.py` to see what the key can use."
+        )
+    return JSONResponse(status_code=502, content={"detail": detail})
 
 
 # ===========================================================================

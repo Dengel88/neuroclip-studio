@@ -155,6 +155,21 @@ serverless filesystem killed the function before it served a single request
 (`FUNCTION_INVOCATION_FAILED`). Static storage now degrades to inline base64
 instead of raising.
 
+### Checking a key and a model chain
+
+```bash
+python check_provider.py
+```
+
+Asks the API which models the key can actually see, checks every entry in
+`models.chains` against that list, and makes one real structured call. Keys are
+never printed - only how many were found and which position failed.
+
+Worth running before a deploy: a model name that does not exist for a given key
+is indistinguishable, from inside the app, from an outage. When the chain is
+exhausted the 502 now names what refused and how (`gemini-x:404,
+gemini-y:403`) - a 404 means the name is wrong, a 401/403 means the key is.
+
 ## Swapping the model
 
 `config.yaml` is the only place a model name appears. To move the whole pipeline

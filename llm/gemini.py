@@ -115,6 +115,10 @@ class GeminiProvider(LLMProvider):
         retry_on = config.retry.retry_on_status
         attempts_per_key = config.retry.attempts_per_key
         last_error: Optional[BaseException] = None
+        # Model name + HTTP status only. Enough to diagnose "which model, what
+        # kind of refusal" without putting an upstream error body - which may
+        # echo request contents - in front of a user.
+        trail: List[str] = []
 
         for model_name in model_chain:
             model_is_dead = False
@@ -130,6 +134,10 @@ class GeminiProvider(LLMProvider):
                     except Exception as exc:  # noqa: BLE001 - re-raised after classification
                         last_error = exc
                         verdict = classify(exc, retry_on)
+                        status = _status_of(exc)
+                        marker = f"{model_name}:{status or type(exc).__name__}"
+                        if marker not in trail:
+                            trail.append(marker)
                         logger.warning(
                             "llm.failure model=%s key=#%d try=%d verdict=%s error=%s",
                             model_name, key_index, attempt + 1,
@@ -150,11 +158,16 @@ class GeminiProvider(LLMProvider):
                 if model_is_dead:
                     break
 
-        logger.error("llm.exhausted models=%s keys=%d", model_chain, len(self.keys))
-        raise ProviderExhaustedError(
+        logger.error(
+            "llm.exhausted models=%s keys=%d trail=%s",
+            model_chain, len(self.keys), trail,
+        )
+        error = ProviderExhaustedError(
             f"All {len(self.keys)} key(s) and {len(model_chain)} model(s) were tried "
             f"without success. Last error: {last_error}"
         )
+        error.trail = trail
+        raise error
 
     async def generate_structured(
         self,
