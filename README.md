@@ -122,13 +122,18 @@ GEMINI_API_KEY_1   your Google AI Studio key
 SESSION_SECRET     python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Everything else is inferred. `api/index.py` is the function entrypoint - a
-three-line shim that imports the same `app` uvicorn runs locally, so there is no
-second code path to keep in sync. `vercel.json` bundles the repository into the
-function (`includeFiles`) because `config.yaml`, `prompts/*.md` and `index.html`
-are read at runtime and import tracing alone would not carry them, and raises
-`maxDuration` to 60s - a full generation step is far longer than the 10s
-default.
+`vercel.json` routes every request to `main.py` - the same module uvicorn
+serves locally, so there is no second code path to keep in sync - and bundles
+the repository into the function (`includeFiles`), because `config.yaml`,
+`prompts/*.md` and `index.html` are read at runtime and import tracing alone
+would not carry them.
+
+The routing form matters. A `rewrites` rule pointing at a fixed destination
+replaces the request path before the app sees it, so every route collapses onto
+one and even `/openapi.json` returns 404. `routes` with `dest` passes the
+original path through. If a deployment ever 404s on paths that work locally,
+request any URL and read `received_path` in the response body - the catch-all
+handler reports the path the app was actually given.
 
 `requirements.txt` carries runtime dependencies only; test tooling lives in
 `requirements-dev.txt` and is not shipped into the bundle.

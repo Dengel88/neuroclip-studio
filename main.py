@@ -468,6 +468,27 @@ async def _render_reference_frames(state: PipelineState) -> Dict[int, dict]:
     return frames
 
 
+# Registered last, so it only sees requests no real route matched. A bare 404
+# on a platform that may rewrite paths tells you nothing; this says which path
+# actually arrived, which is the difference between a five-minute fix and an
+# afternoon of guessing.
+@app.api_route("/{unmatched:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def route_not_found(unmatched: str, request: Request):
+    known = sorted(
+        route.path for route in app.routes if getattr(route, "path", "").startswith("/")
+    )
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": f"No route matches '{request.url.path}'.",
+            "received_path": request.url.path,
+            "known_routes": [r for r in known if not r.startswith("/{")],
+            "hint": "If received_path is not the path you requested, the host is "
+                    "rewriting it before the app sees it - check vercel.json routing.",
+        },
+    )
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
