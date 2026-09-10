@@ -197,7 +197,7 @@ To add a provider: implement `llm/base.py::LLMProvider`, add one line to
 pytest
 ```
 
-143 tests, no network. Coverage is aimed at the things that broke before:
+147 tests, no network. Coverage is aimed at the things that broke before:
 placeholder substitution, the duration validator, key rotation against faked
 429/503/404/400 responses, the transport-vs-validation split, repair-loop
 recovery and exhaustion, targeted retakes, session expiry, eviction, token
@@ -275,5 +275,8 @@ These are real and deliberate, not oversights:
 - **The final render is a showcase.** Full video synthesis is not wired up; the
   "Render" button plays a pre-rendered clip. The pipeline produces prompts, not
   video.
+- **Reference frames need paid quota.** Image models answer 429 on a free key,
+  so the storyboard arrives without still frames. That path degrades rather than
+  failing: the technical prompts are complete and usable on their own.
 - **Eval numbers measure the pipeline, not the model.** They prove the contracts
   hold; they say nothing about whether the storyboard is any good.

@@ -260,3 +260,59 @@ async def test_trail_does_not_repeat_identical_failures(fast_retries, no_real_cl
         await provider._execute_with_rotation(["one-model"], attempt)
 
     assert exc.value.trail == ["one-model:403"]
+
+
+# -- image generation ----------------------------------------------------
+
+
+async def test_image_is_read_from_an_inline_data_part(fast_retries, monkeypatch):
+    """Gemini image models answer through generate_content, not generate_images."""
+
+    class Inline:
+        data = b"\xff\xd8jpeg-bytes"
+
+    class Part:
+        inline_data = Inline()
+
+    class Content:
+        parts = [Part()]
+
+    class Candidate:
+        content = Content()
+
+    class Response:
+        candidates = [Candidate()]
+
+    class Models:
+        def generate_content(self, **kwargs):
+            return Response()
+
+        def generate_images(self, **kwargs):  # pragma: no cover - must not be called
+            raise AssertionError("generate_images is the deprecated Imagen-only call")
+
+    class Client:
+        models = Models()
+
+    monkeypatch.setattr("llm.gemini.genai.Client", lambda api_key: Client())
+    monkeypatch.setattr(config.models.chains, "image", ["an-image-model"])
+    provider = GeminiProvider(api_keys=["k1"])
+
+    assert await provider.generate_image("a red apple", "16:9") == b"\xff\xd8jpeg-bytes"
+
+
+async def test_missing_image_degrades_to_none(fast_retries, monkeypatch):
+    """A quota wall on images must not fail the whole prompt request.
+
+    Image models are the first thing to hit a free-tier limit, and a storyboard
+    without reference frames is still a usable deliverable.
+    """
+    monkeypatch.setattr("llm.gemini.genai.Client", lambda api_key: object())
+    monkeypatch.setattr(config.models.chains, "image", ["img-a", "img-b"])
+    provider = GeminiProvider(api_keys=["k1"])
+
+    async def refuse(chain, fn):
+        raise ProviderExhaustedError("all image models refused")
+
+    monkeypatch.setattr(provider, "_execute_with_rotation", refuse)
+
+    assert await provider.generate_image("a red apple", "16:9") is None

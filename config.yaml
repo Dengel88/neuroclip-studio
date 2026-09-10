@@ -13,13 +13,18 @@ models:
   # Logical role -> ordered fallback chain. The first entry is the primary
   # model; the provider walks down the chain when a model is unavailable.
   chains:
+    # Verified against a live key with `python check_provider.py`. The pro
+    # model sits last on purpose: it has no free-tier quota and answers 429,
+    # so leading with it costs a wasted round trip on every request.
     reasoning:
-      - gemini-3.1-pro-preview
       - gemini-3.5-flash
+      - gemini-3.6-flash
+      - gemini-3.1-pro-preview
+    # Image generation needs paid quota; on a free key these all answer 429 and
+    # the pipeline degrades to prompts without reference frames.
     image:
-      - imagen-3.0-generate-001
       - gemini-3-pro-image
-      - imagen-4.0-generate-001
+      - gemini-3.1-flash-image
 
 agents:
   scriptwriter:

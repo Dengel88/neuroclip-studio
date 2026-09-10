@@ -202,27 +202,37 @@ class GeminiProvider(LLMProvider):
     async def generate_image(
         self, prompt: str, aspect_ratio: str, model_alias: str = "image"
     ) -> Optional[bytes]:
+        """Render a still frame via generate_content.
+
+        Not `generate_images`: that is the Imagen-only call, now deprecated, and
+        it refuses a `gemini-*-image` model outright. The Gemini image models
+        return the picture as an inline data part of an ordinary content
+        response instead.
+        """
         model_chain = getattr(config.models.chains, model_alias)
 
         def _call(client: "genai.Client", model_name: str) -> bytes:
-            result = client.models.generate_images(
+            response = client.models.generate_content(
                 model=model_name,
-                prompt=prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    output_mime_type="image/jpeg",
-                    aspect_ratio=aspect_ratio,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(aspect_ratio=aspect_ratio),
                 ),
             )
-            images = getattr(result, "generated_images", None)
-            if not images:
-                raise ProviderError(f"{model_name} returned no image data.")
-            return images[0].image.image_bytes
+            for candidate in response.candidates or []:
+                parts = getattr(getattr(candidate, "content", None), "parts", None) or []
+                for part in parts:
+                    inline = getattr(part, "inline_data", None)
+                    if inline is not None and inline.data:
+                        return inline.data
+            raise ProviderError(f"{model_name} returned no image data.")
 
         try:
             return await self._execute_with_rotation(model_chain, _call)
         except ProviderError as exc:
             # A missing reference frame degrades the result but must not fail
-            # the whole request - the text prompt is still usable.
-            logger.error("image.unavailable error=%s", exc)
+            # the whole request - the text prompt is still usable, and image
+            # generation is the first thing to hit a quota wall.
+            logger.warning("image.unavailable error=%s", exc)
             return None
