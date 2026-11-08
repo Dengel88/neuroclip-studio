@@ -111,6 +111,58 @@ class ImagesConfig(BaseModel):
         return self
 
 
+class PriceTier(BaseModel):
+    """One step of the price list.
+
+    `seconds` is what the client buys and sees; `storyboard_seconds` is what
+    the storyboard is planned for. They differ only where the advertised
+    length cannot be built from the allowed clip lengths (15 s from 4/6/8 s
+    clips is impossible, so a "15 s" video is planned as 16 s and trimmed at
+    assembly).
+    """
+
+    seconds: int = Field(..., ge=1)
+    storyboard_seconds: int = Field(..., ge=1)
+    price: int = Field(..., ge=0)
+    revisions: int = Field(..., ge=0)
+    days: int = Field(..., ge=1)
+
+
+class FreeOfferConfig(BaseModel):
+    seconds: int = Field(..., ge=1)
+    per_user: int = Field(..., ge=0)
+    daily_cap: int = Field(..., ge=0)
+    channel: str = Field(..., min_length=2)
+    channel_url: str
+
+
+class ShopConfig(BaseModel):
+    """The paid service on top of the pipeline: price list, free offer, storage."""
+
+    currency: str = "RUB"
+    tiers: List[PriceTier] = Field(..., min_length=1)
+    free: FreeOfferConfig
+    database: str = "data/shop.sqlite3"
+    # VAT code for the 54-FZ receipt that YooKassa issues: 1 = no VAT (USN).
+    vat_code: int = Field(default=1, ge=1, le=12)
+    login_ttl_seconds: int = Field(default=30 * 24 * 3600, ge=60)
+
+    @model_validator(mode="after")
+    def _check_tiers(self) -> "ShopConfig":
+        seconds = [t.seconds for t in self.tiers]
+        if seconds != sorted(set(seconds)):
+            raise ValueError("shop.tiers must be sorted by seconds, without duplicates")
+        if self.free.seconds not in seconds:
+            raise ValueError("shop.free.seconds must match one of shop.tiers")
+        return self
+
+    def tier(self, seconds: int) -> PriceTier:
+        for tier in self.tiers:
+            if tier.seconds == seconds:
+                return tier
+        raise KeyError(seconds)
+
+
 class AppConfig(BaseModel):
     provider: str
     models: ModelsConfig
@@ -122,6 +174,26 @@ class AppConfig(BaseModel):
     sessions: SessionsConfig
     rate_limit: RateLimitConfig
     images: ImagesConfig
+    shop: ShopConfig | None = None
+
+    @model_validator(mode="after")
+    def _check_shop(self) -> "AppConfig":
+        # Every tier's storyboard must be buildable from the allowed clip
+        # lengths, or a paid order would fail at the storyboard step.
+        if self.shop is None:
+            return self
+        clips = self.domain.allowed_scene_durations
+        reachable = {0}
+        for total in range(1, self.domain.max_total_duration + 1):
+            if any(total - c in reachable for c in clips if total >= c):
+                reachable.add(total)
+        for tier in self.shop.tiers:
+            if tier.storyboard_seconds not in reachable:
+                raise ValueError(
+                    f"shop tier {tier.seconds}s: storyboard_seconds={tier.storyboard_seconds} "
+                    f"cannot be built from clips of {clips} seconds"
+                )
+        return self
 
     @property
     def images_dir(self) -> Path:

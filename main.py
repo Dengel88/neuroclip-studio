@@ -18,12 +18,13 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Dict, Optional
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config import BASE_DIR, config
@@ -320,6 +321,7 @@ async def health():
         "sessions_backend": config.sessions.backend,
         "images_storage": config.images.storage,
         "problems": PROBLEMS,
+        "shop": SHOP_STATUS,
     }
 
 
@@ -478,6 +480,59 @@ async def _render_reference_frames(state: PipelineState) -> Dict[int, dict]:
         except OSError as exc:
             logger.error("image.save_failed scene=%d error=%s", prompt.scene_number, exc)
     return frames
+
+
+# ===========================================================================
+# «Создай видео»: orders, Telegram login, payments (shop/)
+# ===========================================================================
+
+
+def shop_status() -> str:
+    """Why the paid service is or is not mounted, for /api/health."""
+    if config.shop is None:
+        return "disabled: no `shop` section in config.yaml"
+    if not SESSION_SECRET:
+        return "disabled: SESSION_SECRET is not set (it signs the login cookie)"
+    if os.getenv("VERCEL") and not os.getenv("SHOP_DATABASE"):
+        return "disabled: serverless filesystem is read-only; set SHOP_DATABASE to a writable path"
+    if session_store is None:
+        return "disabled: the pipeline is not configured"
+    return "enabled"
+
+
+SHOP_STATUS = shop_status()
+shop_store = None
+if SHOP_STATUS == "enabled":
+    from shop.routes import ShopClients, build_router
+    from shop.store import ShopStore
+
+    _db = os.getenv("SHOP_DATABASE") or config.shop.database
+    if _db != ":memory:" and not Path(_db).is_absolute():
+        _db = BASE_DIR / _db
+    shop_store = ShopStore(_db)
+    shop_clients = ShopClients.from_env()
+    app.include_router(
+        build_router(config, lambda: session_store, SESSION_SECRET, shop_store, shop_clients)
+    )
+
+    @app.get("/studio", response_class=HTMLResponse)
+    async def studio(caller: str = Depends(read_guard)):
+        return (BASE_DIR / "studio.html").read_text(encoding="utf-8")
+
+    @app.get("/cabinet", response_class=HTMLResponse)
+    async def cabinet(caller: str = Depends(read_guard)):
+        return (BASE_DIR / "cabinet.html").read_text(encoding="utf-8")
+
+    @app.get("/shop.css")
+    async def shop_css():
+        return Response((BASE_DIR / "shop.css").read_text(encoding="utf-8"), media_type="text/css")
+
+    @app.get("/shop_common.js")
+    async def shop_js():
+        return Response(
+            (BASE_DIR / "shop_common.js").read_text(encoding="utf-8"),
+            media_type="application/javascript",
+        )
 
 
 # Registered last, so it only sees requests no real route matched. A bare 404

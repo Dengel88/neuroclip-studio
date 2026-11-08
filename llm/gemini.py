@@ -30,6 +30,18 @@ from errors import ProviderError, ProviderExhaustedError
 
 from .base import LLMProvider
 
+
+def _make_client(key: str) -> genai.Client:
+    """A Gemini client, optionally through a relay.
+
+    Google refuses requests from Russian IPs, so a server hosted in Russia
+    sets GEMINI_BASE_URL to a relay outside it (the Cloudflare worker).
+    """
+    base_url = os.getenv("GEMINI_BASE_URL", "").strip()
+    if base_url:
+        return genai.Client(api_key=key, http_options=types.HttpOptions(base_url=base_url))
+    return genai.Client(api_key=key)
+
 logger = logging.getLogger("NeuroclipStudio.LLM")
 
 T = TypeVar("T", bound=BaseModel)
@@ -140,7 +152,7 @@ class GeminiProvider(LLMProvider):
         for model_name in model_chain:
             model_is_dead = False
             for key_index, key in enumerate(self.keys, start=1):
-                client = genai.Client(api_key=key)
+                client = _make_client(key)
                 for attempt in range(attempts_per_key):
                     try:
                         logger.info(

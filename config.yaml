@@ -120,3 +120,28 @@ images:
   directory: static
   retention_seconds: 3600
   cleanup_interval_seconds: 600
+
+shop:
+  # «Создай видео»: the paid service on top of the pipeline.
+  currency: RUB
+  # Prices in roubles. `seconds` is what the client buys; `storyboard_seconds`
+  # is what the storyboard is planned for (15 s cannot be built from 4/6/8 s
+  # clips, so it is planned as 16 s and trimmed at assembly).
+  tiers:
+    - {seconds: 15,  storyboard_seconds: 16,  price: 1000,  revisions: 1, days: 1}
+    - {seconds: 30,  storyboard_seconds: 30,  price: 1900,  revisions: 1, days: 2}
+    - {seconds: 60,  storyboard_seconds: 60,  price: 3500,  revisions: 1, days: 2}
+    - {seconds: 120, storyboard_seconds: 120, price: 6500,  revisions: 1, days: 3}
+    - {seconds: 180, storyboard_seconds: 180, price: 9000,  revisions: 2, days: 4}
+    - {seconds: 300, storyboard_seconds: 300, price: 14000, revisions: 2, days: 5}
+  free:
+    # One free video for subscribing to the Telegram channel.
+    seconds: 15
+    per_user: 1
+    # Free videos accepted per day across all users, to protect the credits.
+    daily_cap: 10
+    channel: "@SynndicateHQ"
+    channel_url: "https://t.me/SynndicateHQ"
+  database: data/shop.sqlite3
+  vat_code: 1
+  login_ttl_seconds: 2592000

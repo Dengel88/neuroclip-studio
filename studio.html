@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Создай видео — SYNNDICATE</title>
+    <link rel="stylesheet" href="/shop.css">
+</head>
+<body>
+<main>
+    <h1><span>Создай видео</span></h1>
+    <p class="lead">Опишите идею, выберите концепцию и раскадровку — ролик соберёт команда SYNNDICATE.
+        Первый ролик 15 секунд бесплатно за подписку на наш Telegram-канал.</p>
+
+    <section class="panel" id="brief_panel">
+        <h2>1. Бриф</h2>
+        <label>Длительность</label>
+        <div class="tiers" id="tiers"></div>
+        <div class="grid">
+            <div><label for="video_format">Формат кадра</label>
+                <select id="video_format">
+                    <option value="9:16">9:16 — Reels, Shorts, TikTok</option>
+                    <option value="16:9">16:9 — YouTube, сайт</option>
+                    <option value="1:1">1:1 — лента</option>
+                </select></div>
+            <div><label for="business_goal">Задача ролика</label>
+                <input id="business_goal" maxlength="200" placeholder="Продать, объяснить, прогреть..."></div>
+            <div><label for="target_audience">Кто смотрит</label>
+                <input id="target_audience" maxlength="200" placeholder="Например: владельцы кофеен, 25–40"></div>
+            <div><label><input type="checkbox" id="needs_voiceover" style="width:auto"> Нужен голос диктора</label></div>
+        </div>
+        <div style="margin-top:14px">
+            <label for="topic_idea">Идея и продукт</label>
+            <textarea id="topic_idea" rows="4" maxlength="2000"
+                placeholder="Что за продукт, главная мысль, призыв в конце, стиль (реализм, 3D, аниме...), что нельзя показывать"></textarea>
+        </div>
+        <button class="primary" id="btn_concepts" onclick="makeConcepts()">Придумать идеи</button>
+        <div id="concepts_wait"></div>
+        <div id="concepts" style="margin-top:16px"></div>
+    </section>
+
+    <section class="panel hidden" id="storyboard_panel">
+        <h2>2. Раскадровка</h2>
+        <p class="muted">Можно поправить текст любой сцены или переснять её — длительность сцены сохранится.</p>
+        <div id="storyboard_wait"></div>
+        <div id="scenes"></div>
+    </section>
+
+    <section class="panel hidden" id="order_panel">
+        <h2>3. Заказ</h2>
+        <p id="order_summary"></p>
+        <div id="login_box"></div>
+        <div id="order_actions" class="hidden">
+            <div id="free_box" class="hidden">
+                <p class="muted">Бесплатный ролик: подпишитесь на <a id="channel_link" target="_blank" rel="noopener"></a>,
+                    затем нажмите кнопку. Ролик придёт с водяным знаком, без правок.</p>
+                <button class="primary" id="btn_free" onclick="placeOrder(true)">Получить бесплатно</button>
+            </div>
+            <button class="primary" id="btn_paid" onclick="placeOrder(false)"></button>
+        </div>
+        <div id="order_wait"></div>
+        <p class="error" id="order_error"></p>
+    </section>
+</main>
+
+<script src="/shop_common.js"></script>
+<script>
+    let pricing = null, tier = null, sessionId = null, concepts = [], scenes = [], me = null, meLoading = null;
+
+    async function boot() {
+        pricing = await api('/api/shop/pricing');
+        const box = document.getElementById('tiers');
+        box.innerHTML = pricing.tiers.map((t, i) => `
+            <button class="tier" data-i="${i}" onclick="pickTier(${i})">
+                <strong>${lengthLabel(t.seconds)}</strong>${rub(t.price)}
+                ${t.seconds === pricing.free.seconds ? '<div class="free">или бесплатно</div>' : ''}
+            </button>`).join('');
+        pickTier(0);
+        await refreshMe();
+    }
+
+    function pickTier(i) {
+        tier = pricing.tiers[i];
+        document.querySelectorAll('.tier').forEach(b => b.classList.toggle('active', Number(b.dataset.i) === i));
+        // A storyboard is planned for one length; a new length means a new storyboard.
+        if (sessionId) resetAfterBrief();
+    }
+
+    function resetAfterBrief() {
+        sessionId = null;
+        document.getElementById('concepts').innerHTML = '';
+        document.getElementById('storyboard_panel').classList.add('hidden');
+        document.getElementById('order_panel').classList.add('hidden');
+    }
+
+    async function makeConcepts() {
+        const btn = document.getElementById('btn_concepts');
+        const payload = {
+            video_format: document.getElementById('video_format').value,
+            total_duration: tier.storyboard_seconds,
+            business_goal: document.getElementById('business_goal').value.trim(),
+            target_audience: document.getElementById('target_audience').value.trim(),
+            topic_idea: document.getElementById('topic_idea').value.trim(),
+            needs_voiceover: document.getElementById('needs_voiceover').checked,
+        };
+        if (!payload.business_goal || !payload.target_audience || !payload.topic_idea) {
+            alert('Заполните задачу, аудиторию и идею.');
+            return;
+        }
+        resetAfterBrief();
+        btn.disabled = true;
+        try {
+            const data = await withQuips('concepts', document.getElementById('concepts_wait'),
+                () => api('/api/generate-concepts', payload));
+            sessionId = data.session_id;
+            concepts = data.concepts;
+            document.getElementById('concepts').innerHTML = concepts.map((c, i) => `
+                <div class="card">
+                    <h3>${escapeHtml(c.working_title)}</h3>
+                    <p>${escapeHtml(c.logline)}</p>
+                    <p class="muted">Стиль: ${escapeHtml(c.visual_style)} · Темп: ${escapeHtml(c.pacing)}</p>
+                    <button class="secondary" onclick="pickConcept(${i})">Беру эту</button>
+                </div>`).join('');
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            btn.disabled = false;
+            document.getElementById('concepts_wait').innerHTML = '';
+        }
+    }
+
+    async function pickConcept(i) {
+        const panel = document.getElementById('storyboard_panel');
+        panel.classList.remove('hidden');
+        document.getElementById('scenes').innerHTML = '';
+        panel.scrollIntoView({ behavior: 'smooth' });
+        try {
+            const data = await withQuips('storyboard', document.getElementById('storyboard_wait'),
+                () => api('/api/generate-storyboard', { session_id: sessionId, concept_id: concepts[i].id }));
+            sessionId = data.session_id;
+            scenes = data.scenes;
+            renderScenes();
+            showOrder();
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            document.getElementById('storyboard_wait').innerHTML = '';
+        }
+    }
+
+    function renderScenes() {
+        document.getElementById('scenes').innerHTML = scenes.map((s, i) => `
+            <div class="card">
+                <div class="row">
+                    <strong>Сцена ${s.scene_number} · ${s.duration} с</strong>
+                    <span class="muted">Камера: ${escapeHtml(s.camera_movement)}</span>
+                    <button class="secondary" onclick="retake(${s.scene_number})">Переснять</button>
+                </div>
+                <textarea id="scene_${i}" rows="3" style="margin-top:8px">${escapeHtml(s.visual_description)}</textarea>
+            </div>`).join('');
+    }
+
+    function sceneEdits() {
+        const edits = {};
+        scenes.forEach((s, i) => {
+            const field = document.getElementById(`scene_${i}`);
+            if (field) { s.visual_description = field.value; edits[s.scene_number] = field.value; }
+        });
+        return edits;
+    }
+
+    async function retake(n) {
+        const note = prompt(`Что изменить в сцене ${n}? (можно оставить пустым)`);
+        if (note === null) return;
+        sceneEdits();
+        try {
+            const data = await withQuips('storyboard', document.getElementById('storyboard_wait'),
+                () => api('/api/regenerate-scene', { session_id: sessionId, scene_number: n, note: note || null }));
+            sessionId = data.session_id;
+            scenes = data.scenes;
+            renderScenes();
+        } catch (e) {
+            alert(e.message);
+        } finally {
+            document.getElementById('storyboard_wait').innerHTML = '';
+        }
+    }
+
+    function refreshMe() {
+        meLoading = api('/api/shop/me').then(d => { me = d; }, () => { me = null; });
+        return meLoading;
+    }
+
+    async function showOrder() {
+        await meLoading;
+        const panel = document.getElementById('order_panel');
+        panel.classList.remove('hidden');
+        document.getElementById('order_summary').innerHTML =
+            `Ролик ${lengthLabel(tier.seconds)}, ${scenes.length} сцен, срок ${tier.days} дн., правок: ${tier.revisions}. ` +
+            `Стоимость <strong>${rub(tier.price)}</strong>.`;
+        const actions = document.getElementById('order_actions');
+        if (!me) {
+            actions.classList.add('hidden');
+            mountTelegramLogin(document.getElementById('login_box'), pricing.telegram_bot_username,
+                async () => { await refreshMe(); showOrder(); });
+            return;
+        }
+        document.getElementById('login_box').innerHTML =
+            `<p class="muted">Вы вошли как ${escapeHtml(me.user.first_name || me.user.username)}. <a href="/cabinet">Мои заказы</a></p>`;
+        actions.classList.remove('hidden');
+        const freeOk = tier.seconds === pricing.free.seconds && me.free_left > 0;
+        document.getElementById('free_box').classList.toggle('hidden', !freeOk);
+        const link = document.getElementById('channel_link');
+        link.href = pricing.free.channel_url;
+        link.textContent = pricing.free.channel;
+        const paid = document.getElementById('btn_paid');
+        paid.textContent = `Заказать за ${rub(tier.price)}`;
+        paid.classList.toggle('hidden', !pricing.payments_enabled);
+    }
+
+    async function placeOrder(free) {
+        const error = document.getElementById('order_error');
+        error.textContent = '';
+        document.querySelectorAll('#order_actions button').forEach(b => b.disabled = true);
+        try {
+            const order = await withQuips('prompts', document.getElementById('order_wait'), async () => {
+                // Prompts for production are written now, with the client's own scene edits.
+                const prompts = await api('/api/generate-prompts', { session_id: sessionId, scene_descriptions: sceneEdits() });
+                sessionId = prompts.session_id;
+                return api('/api/shop/orders', { session_id: sessionId, seconds: tier.seconds, free });
+            });
+            location.href = `/cabinet?order=${encodeURIComponent(order.id)}`;
+        } catch (e) {
+            error.textContent = e.message;
+        } finally {
+            document.getElementById('order_wait').innerHTML = '';
+            document.querySelectorAll('#order_actions button').forEach(b => b.disabled = false);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => boot().catch(e => alert(e.message)));
+</script>
+</body>
+</html>
