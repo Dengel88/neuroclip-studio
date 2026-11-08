@@ -5,7 +5,7 @@
       "src": "main.py",
       "use": "@vercel/python",
       "config": {
-        "includeFiles": "**",
+        "includeFiles": "{config.yaml,prompts/**,*.html,shop.css,shop_common.js}",
         "maxLambdaSize": "50mb"
       }
     }

@@ -126,9 +126,11 @@ SESSION_SECRET     python -c "import secrets; print(secrets.token_hex(32))"
 
 `vercel.json` routes every request to `main.py` - the same module uvicorn
 serves locally, so there is no second code path to keep in sync - and bundles
-the repository into the function (`includeFiles`), because `config.yaml`,
-`prompts/*.md` and `index.html` are read at runtime and import tracing alone
-would not carry them.
+the runtime data files into the function (`includeFiles`), because
+`config.yaml`, `prompts/*.md` and the HTML pages are read at runtime and import
+tracing alone would not carry them. The list is explicit on purpose: Vercel's
+builder creates its virtualenv inside the checkout (`.vercel/python/.venv`), so
+a `**` glob bundles every dependency twice and overflows the 225 MB limit.
 
 Two platform quirks are worked around rather than fought. The Python bridge
 cannot parse a request body containing raw non-ASCII bytes - it answers
