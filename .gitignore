@@ -14,3 +14,4 @@ evals/results/
 .vscode/
 *.log
 .DS_Store
+data/

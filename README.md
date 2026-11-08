@@ -8,6 +8,8 @@ supervisor — behind a FastAPI backend and a single-page UI. The interesting pa
 is not the agent chain; it is that **the pipeline checks its own output in code**
 and repairs it before the user ever sees it.
 
+> **«Создай видео».** The paid service built on this pipeline (Telegram login, free 15 s video for a channel subscription, YooKassa payments, order cabinet) lives in [`shop/`](shop/) and is documented in [SHOP.md](SHOP.md).
+
 ---
 
 ## What is actually enforced

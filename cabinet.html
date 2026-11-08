@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мои заказы — SYNNDICATE</title>
+    <link rel="stylesheet" href="/shop.css">
+</head>
+<body>
+<main>
+    <h1><span>Мои заказы</span></h1>
+    <p class="lead">Статусы приходят и сюда, и в Telegram. <a href="/studio">Новый ролик</a></p>
+    <div id="login_box"></div>
+    <div id="orders"></div>
+</main>
+
+<script src="/shop_common.js"></script>
+<script>
+    const focus = new URLSearchParams(location.search).get('order');
+    let pricing = null;
+
+    async function boot() {
+        pricing = await api('/api/shop/pricing');
+        try {
+            await api('/api/shop/me');
+        } catch (e) {
+            if (e.status !== 401) throw e;
+            mountTelegramLogin(document.getElementById('login_box'), pricing.telegram_bot_username, () => location.reload());
+            return;
+        }
+        await render();
+        // While something is in production, look again every 30 s.
+        setInterval(render, 30000);
+    }
+
+    async function render() {
+        const { orders } = await api('/api/shop/orders');
+        const box = document.getElementById('orders');
+        if (!orders.length) {
+            box.innerHTML = '<p class="muted">Заказов пока нет.</p>';
+            return;
+        }
+        // The focused order is read through its own endpoint: that also asks
+        // YooKassa about a fresh payment when the client comes back from it.
+        const details = await Promise.all(orders.map(o =>
+            o.id === focus || o.status !== 'delivered' ? api(`/api/shop/orders/${o.id}`) : o));
+        box.innerHTML = details.map(orderCard).join('');
+    }
+
+    function orderCard(o) {
+        const when = new Date(o.created_at * 1000).toLocaleString('ru-RU');
+        const pay = o.status === 'awaiting_payment' ? `
+            <label for="email_${o.id}" style="margin-top:12px">E-mail для чека</label>
+            <input id="email_${o.id}" type="email" placeholder="you@example.ru">
+            <button class="primary" onclick="pay('${o.id}')">Оплатить ${rub(o.price)}</button>` : '';
+        const result = o.result_url ? `<a class="primary" href="${escapeHtml(o.result_url)}" target="_blank" rel="noopener">Скачать ролик</a>` : '';
+        const history = (o.history || []).map(h => `<li>${new Date(h.at * 1000).toLocaleString('ru-RU')} — ${escapeHtml(h.label)}${h.message ? ': ' + escapeHtml(h.message) : ''}</li>`).join('');
+        return `
+            <section class="panel" ${o.id === focus ? 'style="border-color:var(--cyan)"' : ''}>
+                <div class="row">
+                    <h2 style="margin:0">${escapeHtml(o.title || 'Ролик')} · ${lengthLabel(o.seconds)}</h2>
+                    <span class="status ${o.status}">${escapeHtml(o.status_label)}</span>
+                </div>
+                <p class="muted">Заказ ${o.id} от ${when} · ${o.kind === 'free' ? 'бесплатный' : rub(o.price)} · ${escapeHtml(o.video_format)}</p>
+                ${o.quip ? `<p class="quip">${escapeHtml(o.quip)}</p>` : ''}
+                ${pay}${result}
+                <p class="error" id="error_${o.id}"></p>
+                <ul class="history">${history}</ul>
+            </section>`;
+    }
+
+    async function pay(id) {
+        const email = document.getElementById(`email_${id}`).value.trim();
+        try {
+            const { confirmation_url } = await api(`/api/shop/orders/${id}/pay`, { email });
+            location.href = confirmation_url;
+        } catch (e) {
+            document.getElementById(`error_${id}`).textContent = e.message;
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => boot().catch(e => alert(e.message)));
+</script>
+</body>
+</html>

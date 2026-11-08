@@ -22,6 +22,8 @@ os.environ.setdefault("SESSION_SECRET", "test-secret-not-used-anywhere-real")
 # The suite never touches the network, so the offline provider is the default.
 # It also keeps the app's own readiness check satisfied without a fake API key.
 os.environ.setdefault("LLM_PROVIDER", "mock")
+# The paid service keeps orders in SQLite; tests never write a file.
+os.environ.setdefault("SHOP_DATABASE", ":memory:")
 
 from config import load_config  # noqa: E402
 from llm.mock import MockProvider  # noqa: E402
